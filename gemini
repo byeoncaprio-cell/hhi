@@ -1,0 +1,1160 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, colorchooser, simpledialog
+from typing import Set, Tuple, List, Dict, Union, Optional
+from dataclasses import dataclass, field
+from collections import Counter, OrderedDict
+import random
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
+from openpyxl.utils import get_column_letter
+
+# --------------------------------
+# Types & Models
+# --------------------------------
+Cell = Tuple[int, int]  # (row, col) 1-based
+
+@dataclass
+class Block:
+    rows: int
+    cols: int
+    hatch: str = ""
+    hold: str = ""
+    bay: str = ""
+    deck: str = ""
+    cell_colors: Dict[Cell, str] = field(default_factory=dict)            # "#RRGGBB"
+    cell_numbers: Dict[Cell, Union[int, float, str]] = field(default_factory=dict)  # RD 번호
+    sockets: Set[Cell] = field(default_factory=set)
+    gang_counts: Dict[int, int] = field(default_factory=dict)             # {3: n, ..., 9: n}
+
+@dataclass
+class SectionHeader:
+    title: str
+
+Item = Union[Block, SectionHeader]
+
+
+# --------------------------------
+# Shape Library for Auto-Set (NEW)
+# --------------------------------
+# (row_offset, col_offset) tuples relative to an anchor point.
+# Larger, more compact shapes are prioritized.
+SHAPE_LIBRARY: Dict[int, List[List[Cell]]] = {
+    9: [
+        [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)],  # 3x3 Solid
+        [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 0), (1, 1), (1, 2), (1, 3)],  # 5+4 Step
+    ],
+    8: [
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)],  # 2x4
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],  # 4x2
+    ],
+    7: [
+        [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0)],  # 3x3 L-shape
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2)],  # 4+3 Step
+    ],
+    6: [
+        [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)],  # 2x3
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)],  # 3x2
+    ],
+    5: [
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)],  # L-shape
+        [(0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],  # Plus shape
+    ],
+    4: [
+        [(0, 0), (0, 1), (1, 0), (1, 1)],  # 2x2
+    ],
+    3: [
+        [(0, 0), (1, 0), (1, 1)], # Small L
+        [(0, 0), (0, 1), (0, 2)],  # 1x3 (last resort)
+        [(0, 0), (1, 0), (2, 0)],  # 3x1 (last resort)
+    ],
+}
+
+# --------------------------------
+# Utils
+# --------------------------------
+def parse_number_like(s: str) -> Union[int, float, str]:
+    try:
+        if s.strip() == "":
+            return ""
+        if "." in s:
+            f = float(s)
+            return int(f) if f.is_integer() else f
+        return int(s)
+    except Exception:
+        return s
+
+def header_sequence(n: int) -> List[int]:
+    evens = [x for x in range(n, 0, -1) if x % 2 == 0]
+    odds = list(range(1, n + 1, 2))
+    return evens + odds
+
+def set_range_border(ws, min_row, max_row, min_col, max_col, side_top, side_right, side_bottom, side_left):
+    for r in range(min_row, max_row + 1):
+        for c in range(min_col, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            bt = side_top    if r == min_row else cell.border.top
+            bb = side_bottom if r == max_row else cell.border.bottom
+            bl = side_left   if c == min_col else cell.border.left
+            br = side_right  if c == max_col else cell.border.right
+            cell.border = Border(top=bt, right=br, bottom=bb, left=bl)
+
+def thick_column_positions(max_grid_cols: int) -> List[int]:
+    if max_grid_cols <= 0:
+        return []
+    seq = header_sequence(max_grid_cols)
+    boundary_col = seq.index(1) + 1
+    pos = []
+    x = boundary_col
+    while x <= max_grid_cols:
+        pos.append(x); x += 4
+    x = boundary_col - 4
+    while x >= 1:
+        pos.append(x); x -= 4
+    return sorted(set(pos))
+
+def safe_sheet_title(s: str) -> str:
+    table = str.maketrans({':': '-', '\\': '-', '/': '-', '?': '-', '*': '-', '[': '-', ']': '-'})
+    t = (s or "").strip().translate(table)
+    return (t if t else "Sheet")[:31]
+
+# --------------------------------
+# Excel Writer
+# --------------------------------
+def write_excel(
+    items: List[Item],
+    filename: str,
+    ship_no: str,
+    looking_text: str = "LOOKING TO FWD",
+    row_gap_between_blocks: int = 2,
+    info_cols: int = 1, gap_after_info: int = 1,
+    deck_cols: int = 1, gap_after_deck: int = 1
+):
+    if not items:
+        raise ValueError("No content to export. Add blocks or section headers.")
+
+    block_cols = [it.cols for it in items if isinstance(it, Block)]
+    max_grid_cols = max(block_cols) if block_cols else 6
+
+    grid_start_col = info_cols + gap_after_info + deck_cols + gap_after_deck + 1
+    grid_right_col = grid_start_col + max_grid_cols - 1
+
+    qty_col = grid_right_col + 3
+    gang_gap_col = qty_col + 1
+    g_start_col = qty_col + 2
+    g_cols = {g: g_start_col + (g - 3) for g in range(3, 10)}  # 3..9
+    g_sum_col = g_start_col + 7
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = safe_sheet_title(ship_no)
+
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_right  = Alignment(horizontal="right",  vertical="center")
+    thin  = Side(style="thin", color="000000")
+    thick = Side(style="thick", color="000000")
+    dashed_med = Side(style="mediumDashed", color="000000")
+    border_thin  = Border(left=thin, right=thin, top=thin, bottom=thin)
+    gray_fill = PatternFill("solid", fgColor="EEEEEE")
+
+    total_cols = g_sum_col
+    for c in range(1, total_cols + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 4
+    for c in range(1, info_cols + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 10
+    ws.column_dimensions[get_column_letter(info_cols + 1)].width = 2
+    for c in range(info_cols + 2, info_cols + 2 + deck_cols):
+        ws.column_dimensions[get_column_letter(c)].width = 4
+    ws.column_dimensions[get_column_letter(info_cols + 2 + deck_cols)].width = 2
+
+    from openpyxl.utils import get_column_letter as _g
+    ws.column_dimensions[_g(qty_col - 2)].width = 4
+    ws.column_dimensions[_g(qty_col - 1)].width = 5
+    ws.column_dimensions[_g(qty_col)].width     = 4
+    ws.column_dimensions[_g(gang_gap_col)].width= 2
+    for g in range(3, 10):
+        ws.column_dimensions[_g(g_cols[g])].width = 4
+    ws.column_dimensions[_g(g_sum_col)].width   = 7
+
+    title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
+    try:
+        ws.oddHeader.center.text = f"&B&11{title_text}"
+        ws.oddHeader.right.text  = f"&B&11{(looking_text or 'LOOKING TO FWD')}"
+    except Exception:
+        pass
+
+    left_end = max(1, grid_right_col - 4)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=left_end)
+    tcell = ws.cell(row=1, column=1, value=title_text)
+    tcell.alignment = align_center
+    tcell.font = Font(size=11, bold=True)
+    set_range_border(ws, 1, 1, 1, left_end, thick, thick, thick, thick)
+
+    right_start = left_end + 1
+    ws.merge_cells(start_row=1, start_column=right_start, end_row=1, end_column=grid_right_col)
+    rcell = ws.cell(row=1, column=right_start, value=(looking_text or "LOOKING TO FWD"))
+    rcell.alignment = align_center
+    rcell.font = Font(size=10)
+    set_range_border(ws, 1, 1, right_start, grid_right_col, thick, thick, thick, thick)
+
+    cur_row = 3
+
+    seq = header_sequence(max_grid_cols)
+    for i, val in enumerate(seq, start=0):
+        cc = grid_start_col + i
+        cell = ws.cell(row=cur_row, column=cc, value=int(val))
+        cell.alignment = align_center
+        cell.font = Font(size=9, bold=True)
+
+    ws.merge_cells(start_row=cur_row+1, start_column=g_cols[3], end_row=cur_row+1, end_column=g_sum_col)
+    gtitle = ws.cell(row=cur_row+1, column=g_cols[3], value="gang별 수량")
+    gtitle.alignment = align_center
+    gtitle.font = Font(size=9, bold=True)
+    for c in range(g_cols[3], g_sum_col + 1):
+        ws.cell(row=cur_row+1, column=c).fill = gray_fill
+
+    hrow = cur_row + 2
+    ws.cell(row=hrow, column=qty_col, value="Q'ty").alignment = align_center
+    for g in range(3, 10):
+        hc = ws.cell(row=hrow, column=g_cols[g], value=g)
+        hc.alignment = align_center
+        hc.fill = gray_fill
+    sm = ws.cell(row=hrow, column=g_sum_col, value="SUM")
+    sm.alignment = align_center
+    sm.fill = gray_fill
+
+    gang_header_row = hrow
+    cur_row = gang_header_row + 1
+
+    vertical_thick_cols = set(thick_column_positions(max_grid_cols))
+    last_used_row = cur_row
+    grand_qty_ranges = []
+
+    count_left_letter  = get_column_letter(grid_start_col)
+    count_right_letter = get_column_letter(grid_start_col + max_grid_cols - 1)
+
+    for it in items:
+        if isinstance(it, SectionHeader):
+            section_left  = grid_start_col
+            section_right = grid_right_col
+            ws.merge_cells(start_row=cur_row, start_column=section_left,
+                           end_row=cur_row, end_column=section_right)
+            scell = ws.cell(row=cur_row, column=section_left, value=it.title)
+            scell.alignment = Alignment(horizontal="center", vertical="center")
+            scell.font = Font(size=24, bold=True)
+            set_range_border(ws, cur_row, cur_row, section_left, section_right,
+                             dashed_med, dashed_med, dashed_med, dashed_med)
+            cur_row += 4
+            last_used_row = max(last_used_row, cur_row - 1)
+            continue
+
+        b: Block = it
+
+        label_text = f"Hatch No. {b.hatch}" if b.hatch else (f"Hold No. {b.hold}" if b.hold else " ")
+        ws.merge_cells(start_row=cur_row, start_column=1, end_row=cur_row, end_column=1)
+        hc = ws.cell(row=cur_row, column=1, value=label_text)
+        hc.alignment = Alignment(horizontal="center", vertical="center")
+        hc.font = Font(size=8, color="C00000")
+        set_range_border(ws, cur_row, cur_row, 1, 1, thin, thin, thin, thin)
+
+        bay_text = f"Bay {b.bay}" if b.bay else " "
+        ws.merge_cells(start_row=cur_row + 1, start_column=1, end_row=cur_row + 1, end_column=1)
+        bc = ws.cell(row=cur_row + 1, column=1, value=bay_text)
+        bc.alignment = Alignment(horizontal="center", vertical="center")
+        bc.font = Font(size=8, color="C00000")
+        set_range_border(ws, cur_row + 1, cur_row + 1, 1, 1, thin, thin, thin, thin)
+
+        deck_col_start = info_cols + 1 + 1
+        deck_col_end   = deck_col_start + deck_cols - 1
+        deck_text = b.deck if b.deck else " "
+        ws.merge_cells(start_row=cur_row, start_column=deck_col_start, end_row=cur_row, end_column=deck_col_end)
+        dc = ws.cell(row=cur_row, column=deck_col_start, value=deck_text)
+        dc.alignment = Alignment(horizontal="center", vertical="center")
+        dc.font = Font(size=8, color="C00000")
+        set_range_border(ws, cur_row, cur_row, deck_col_start, deck_col_end, thin, thin, thin, thin)
+
+        left_offset = (max_grid_cols - b.cols) // 2
+        left_offset = max(0, min(left_offset, max_grid_cols - b.cols))
+
+        block_start_row = cur_row
+        block_end_row   = cur_row + b.rows - 1
+        grand_qty_ranges.append((block_start_row, block_end_row))
+
+        for r in range(1, b.rows + 1):
+            rr = cur_row + r - 1
+            ws.row_dimensions[rr].height = 20
+            for c in range(1, b.cols + 1):
+                global_grid_col = left_offset + c
+                cc = grid_start_col + global_grid_col - 1
+                cell = ws.cell(row=rr, column=cc)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+                hex_color = b.cell_colors.get((r, c))
+                cell.fill = PatternFill("solid", fgColor=hex_color.lstrip("#")) if hex_color else PatternFill("solid", fgColor="FFFFFF")
+                cell.border = border_thin
+
+                if (r, c) in b.cell_numbers:
+                    val = b.cell_numbers[(r, c)]
+                    if isinstance(val, str):
+                        val = parse_number_like(val)
+                    cell.value = val
+
+                if (r, c) in b.sockets:
+                    cell.border = Border(left=Side(style="thick", color="FF0000"),
+                                         right=Side(style="thick", color="FF0000"),
+                                         top=Side(style="thick", color="FF0000"),
+                                         bottom=Side(style="thick", color="FF0000"))
+
+                if global_grid_col in vertical_thick_cols:
+                    cell.border = Border(
+                        left=Side(style="thick", color="000000"),
+                        right=cell.border.right,
+                        top=cell.border.top,
+                        bottom=cell.border.bottom
+                    )
+
+            qcell = ws.cell(row=rr, column=qty_col)
+            qcell.value = f"=COUNT({count_left_letter}{rr}:{count_right_letter}{rr})"
+            qcell.alignment = Alignment(horizontal="center", vertical="center")
+            qcell.font = Font(size=8)
+
+            ws.cell(row=rr, column=gang_gap_col).fill = gray_fill
+            for g in range(3, 10):
+                ws.cell(row=rr, column=g_cols[g]).fill = gray_fill
+            ws.cell(row=rr, column=g_sum_col).fill = gray_fill
+
+        sum_row = block_end_row + 1
+        qcol_letter = get_column_letter(qty_col)
+        total_cell = ws.cell(row=sum_row, column=qty_col,
+                             value=f"=SUM({qcol_letter}{block_start_row}:{qcol_letter}{block_end_row})")
+        total_cell.alignment = Alignment(horizontal="center", vertical="center")
+        total_cell.font = Font(size=8, bold=True)
+        total_cell.border = Border(top=Side(style="thick", color="000000"), left=thin, right=thin, bottom=thin)
+
+        ws.cell(row=sum_row, column=gang_gap_col).fill = gray_fill
+        terms = []
+        for g in range(3, 10):
+            cnt = int(b.gang_counts.get(g, 0) or 0)
+            cell = ws.cell(row=sum_row, column=g_cols[g], value=cnt)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.font = Font(size=8)
+            cell.fill = gray_fill
+            terms.append(f"{g}*{get_column_letter(g_cols[g])}{sum_row}")
+
+        gsum_cell = ws.cell(row=sum_row, column=g_sum_col, value="=" + "+".join(terms))
+        gsum_cell.alignment = Alignment(horizontal="center", vertical="center")
+        gsum_cell.font = Font(size=8, bold=True)
+        gsum_cell.fill = gray_fill
+
+        cur_row += max(b.rows, 2) + row_gap_between_blocks
+        last_used_row = max(last_used_row, cur_row - 1)
+
+    qcol = get_column_letter(qty_col)
+    parts = [f"{qcol}{s}:{qcol}{e}" for (s, e) in grand_qty_ranges]
+    formula = "=SUM(" + ",".join(parts) + ")"
+    grand_row = last_used_row + 2
+
+    label_cell = ws.cell(row=grand_row, column=(qty_col - 1), value="Total")
+    label_cell.alignment = align_right
+    label_cell.font = Font(size=9, bold=True)
+
+    grand_qty_cell = ws.cell(row=grand_row, column=qty_col, value=formula)
+    grand_qty_cell.alignment = Alignment(horizontal="center", vertical="center")
+    grand_qty_cell.font = Font(size=9, bold=True)
+    grand_qty_cell.border = Border(top=Side(style="thick", color="000000"), left=thin, right=thin, bottom=thin)
+
+    for gcol in vertical_thick_cols:
+        col_idx = grid_start_col + gcol - 1
+        for r in range(3, last_used_row + 1):
+            cell = ws.cell(row=r, column=col_idx)
+            cell.border = Border(left=Side(style="thick", color="000000"),
+                                 right=cell.border.right, top=cell.border.top, bottom=cell.border.bottom)
+
+    wb.save(filename)
+
+# --------------------------------
+# GUI
+# --------------------------------
+class GridCanvas(ttk.Frame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.rows = 4
+        self.cols = 20
+        self.cell_px = 22
+
+        self.cell_colors: Dict[Cell, str] = {}
+        self.cell_numbers: Dict[Cell, Union[int, float, str]] = {}
+        self.sockets: Set[Cell] = set()
+
+        self.paint_mode = tk.StringVar(value="ADD COLOR")  # ADD COLOR / ADD NUMBER / ERASER / SOCKET
+        self.current_label = tk.StringVar(value="1")
+        self.current_color = tk.StringVar(value="#87CEFA")
+
+        self.ship_no = tk.StringVar(value="")
+        self.looking_txt = tk.StringVar(value="LOOKING TO FWD")
+
+        # RS/RD 구성
+        self.rs_count = tk.StringVar(value="8")
+        self.rd_per_rs = tk.StringVar(value="12")
+        for var in (self.rs_count, self.rd_per_rs):
+            var.trace_add("write", self._recompute_all)
+
+        # gang summary
+        self.gang_vars: Dict[int, tk.StringVar] = {g: tk.StringVar(value="0") for g in range(3, 10)}
+
+        self.items: List[Item] = []
+        self.editing_index: Optional[int] = None
+
+        outer = ttk.Frame(self, padding=(6, 6, 6, 6)); outer.pack(fill="both", expand=True)
+
+        right = ttk.Frame(outer); right.pack(side="right", fill="both", padx=(8, 0), expand=False)
+        cfg = ttk.LabelFrame(right, text="RS / RD Panels", padding=(8,6,8,8)); cfg.pack(fill="x", pady=(0,8))
+        ttk.Label(cfg, text="RS Panels").grid(row=0, column=0, sticky="e", padx=(2,6), pady=2)
+        ttk.Spinbox(cfg, from_=0, to=999, textvariable=self.rs_count, width=8).grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(cfg, text="RD per RS").grid(row=0, column=2, sticky="e", padx=(12,6), pady=2)
+        ttk.Spinbox(cfg, from_=0, to=999, textvariable=self.rd_per_rs, width=8).grid(row=0, column=3, sticky="w", pady=2)
+
+        ttk.Label(right, text="Live Summary").pack(anchor="w")
+        alloc = ttk.Frame(right); alloc.pack(fill="both", expand=True)
+        left_col = ttk.Frame(alloc); left_col.pack(side="left", fill="both", expand=True, padx=(0,4))
+        ttk.Label(left_col, text="PORT RS (Even)").pack(anchor="w")
+        self.txt_even = tk.Text(left_col, width=34, height=34, font=("Consolas", 10)); self.txt_even.pack(fill="both", expand=True); self.txt_even.configure(state="disabled")
+        right_col = ttk.Frame(alloc); right_col.pack(side="left", fill="both", expand=True, padx=(4,0))
+        ttk.Label(right_col, text="STBD RS (Odd)").pack(anchor="w")
+        self.txt_odd = tk.Text(right_col, width=34, height=34, font=("Consolas", 10)); self.txt_odd.pack(fill="both", expand=True); self.txt_odd.configure(state="disabled")
+
+        left = ttk.Frame(outer); left.pack(side="left", fill="both", expand=True)
+        top = ttk.Frame(left); top.pack(fill="x", pady=(0,6))
+        ttk.Label(top, text="Ship No.").grid(row=0, column=0, padx=(4,4), pady=2, sticky="e")
+        ttk.Entry(top, textvariable=self.ship_no, width=14).grid(row=0, column=1, padx=(0,12), pady=2)
+        ttk.Label(top, text="Header Right").grid(row=0, column=2, padx=(4,4), pady=2, sticky="e")
+        ttk.Entry(top, textvariable=self.looking_txt, width=18).grid(row=0, column=3, padx=(0,12), pady=2)
+
+        ttk.Label(top, text="Mode").grid(row=1, column=0, padx=(4,4), pady=2, sticky="e")
+        self.cmb_mode = ttk.Combobox(top, textvariable=self.paint_mode, values=("ADD COLOR", "ADD NUMBER", "ERASER", "SOCKET"), width=12, state="readonly")
+        self.cmb_mode.grid(row=1, column=1, padx=(0,12), pady=2)
+        ttk.Label(top, text="Number").grid(row=1, column=2, padx=(4,4), pady=2, sticky="e")
+        ttk.Entry(top, textvariable=self.current_label, width=10).grid(row=1, column=3, padx=(0,12), pady=2)
+        ttk.Label(top, text="Color").grid(row=1, column=4, padx=(4,4), pady=2, sticky="e")
+        self.color_preview = tk.Label(top, text="   ", bg=self.current_color.get(), relief="groove", width=4)
+        self.color_preview.grid(row=1, column=5, padx=(0,4), pady=2, sticky="w")
+        ttk.Button(top, text="Pick…", command=self.pick_color).grid(row=1, column=6, padx=(2,12), pady=2)
+
+        btn_row = ttk.Frame(left); btn_row.pack(fill="x", pady=(6, 6))
+        ttk.Button(btn_row, text="Import Excel…", command=self.import_from_excel).grid(row=0, column=0, padx=4, pady=2)
+        ttk.Button(btn_row, text="Edit Selected", command=self.edit_selected).grid(row=0, column=1, padx=4, pady=2)
+        ttk.Button(btn_row, text="Save Edits", command=self.save_edits).grid(row=0, column=2, padx=4, pady=2)
+        ttk.Button(btn_row, text="Delete Selected", command=self.delete_selected).grid(row=0, column=3, padx=4, pady=2)
+        ttk.Button(btn_row, text="Auto Set", command=self.auto_set_groups).grid(row=0, column=4, padx=(12,4), pady=2)
+        ttk.Button(btn_row, text="Export Excel…", command=self.export_excel).grid(row=0, column=5, padx=(12,4), pady=2)
+
+        self.canvas = tk.Canvas(left, bg="white", highlightthickness=1, highlightbackground="#cccccc")
+        self.canvas.pack(fill="both", expand=True, padx=0, pady=(0,6))
+        self.canvas.bind("<Button-1>", self.on_press)
+        self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Button-3>", self.on_press_right)
+        self.canvas.bind("<B3-Motion>", self.on_drag_right)
+        self.canvas.bind("<ButtonRelease-3>", self.on_release_right)
+        self.canvas.bind("<Control-Button-1>", self.on_press_right)
+        self.canvas.bind("<Control-B1-Motion>", self.on_drag_right)
+        self.canvas.bind("<Control-ButtonRelease-1>", self.on_release_right)
+
+        self.drag_start: Optional[Cell] = None
+        self.drag_rect_id: Optional[int] = None
+        self.drag_start_right: Optional[Cell] = None
+        self.drag_rect_id_right: Optional[int] = None
+
+        gang_row = ttk.Frame(left); gang_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(gang_row, text="Gang per Block (for Excel summary)").grid(row=0, column=0, padx=(4,8), pady=2, sticky="e")
+        col = 1
+        for g in range(3, 10):
+            ttk.Label(gang_row, text=f"{g}").grid(row=0, column=col, padx=(4,2), pady=2, sticky="e")
+            ttk.Entry(gang_row, textvariable=self.gang_vars[g], width=5).grid(row=0, column=col+1, padx=(0,8), pady=2)
+            col += 2
+
+        bottom = ttk.Frame(left); bottom.pack(fill="x", pady=(0,6))
+        ttk.Label(bottom, text="Items (Blocks / Sections) — double-click to Edit Block").pack(anchor="w")
+        self.items_list = tk.Listbox(bottom, height=10); self.items_list.pack(fill="x")
+        self.items_list.bind("<Double-Button-1>", lambda e: self.edit_selected())
+
+        meta = ttk.LabelFrame(left, text="Block Meta (선택 블럭의 Hatch/Hold/Bay/Deck)", padding=(8,6,8,8)); meta.pack(fill="x", pady=(0,6))
+        self.meta_label_type = tk.StringVar(value="Hatch No")
+        ttk.Label(meta, text="Label Type").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        ttk.Combobox(meta, textvariable=self.meta_label_type, values=["Hatch No", "Hold No"], width=10, state="readonly").grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(meta, text="No.").grid(row=0, column=2, sticky="e", padx=8, pady=2)
+        self.meta_no = tk.StringVar(value="")
+        ttk.Entry(meta, textvariable=self.meta_no, width=10).grid(row=0, column=3, sticky="w", padx=4, pady=2)
+        ttk.Label(meta, text="Bay").grid(row=1, column=0, sticky="e", padx=4, pady=2)
+        self.meta_bay = tk.StringVar(value="")
+        ttk.Entry(meta, textvariable=self.meta_bay, width=10).grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        ttk.Label(meta, text="Deck").grid(row=1, column=2, sticky="e", padx=8, pady=2)
+        self.meta_deck = tk.StringVar(value="")
+        ttk.Entry(meta, textvariable=self.meta_deck, width=12).grid(row=1, column=3, sticky="w", padx=4, pady=2)
+        ttk.Button(meta, text="Apply to Selected", command=self.apply_meta_to_selected).grid(row=0, column=4, rowspan=2, sticky="nsw", padx=(12,4), pady=2)
+
+        sec = ttk.LabelFrame(left, text="Insert Section (원하는 위치에 삽입)", padding=(8,6,8,8)); sec.pack(fill="x", pady=(0,6))
+        ttk.Label(sec, text="삽입 위치(1-기준)").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        self.insert_pos = tk.StringVar(value="1")
+        self.pos_spin = ttk.Spinbox(sec, from_=1, to=1, textvariable=self.insert_pos, width=6)
+        self.pos_spin.grid(row=0, column=1, sticky="w", padx=4, pady=2)
+        ttk.Button(sec, text="Insert ACCOMMODATION", command=lambda: self.insert_section_at("ACCOMMODATION")).grid(row=0, column=2, padx=(12,4), pady=2)
+        ttk.Button(sec, text="Insert E/R CASING", command=lambda: self.insert_section_at("E/R CASING")).grid(row=0, column=3, padx=4, pady=2)
+
+        self.draw_all()
+        self._recompute_all()
+        self._update_insert_spin_range()
+
+    # ========= RS/RD Helper =========
+    def _rd_list_for_rs(self, rs_index: int, rd_per_rs: int) -> List[int]:
+        if rd_per_rs <= 0 or rs_index <= 0:
+            return []
+        if rs_index % 2 == 1:  # ODD RS → odd RD
+            block_idx = (rs_index - 1) // 2
+            start_odd = 1 + 2 * (block_idx * rd_per_rs)
+            return [start_odd + 2 * i for i in range(rd_per_rs)]
+        else:  # EVEN RS → even RD
+            block_idx = (rs_index // 2) - 1
+            start_even = 2 + 2 * (block_idx * rd_per_rs)
+            return [start_even + 2 * i for i in range(rd_per_rs)]
+
+    def _build_rd_queues(self) -> tuple[List[int], List[int]]:
+        try:
+            rs_total = max(0, int(float(self.rs_count.get() or 0)))
+            rpr = max(0, int(float(self.rd_per_rs.get() or 0)))
+        except Exception:
+            return [], []
+        even_q, odd_q = [], []
+        for rs in range(1, rs_total + 1):
+            rds = self._rd_list_for_rs(rs, rpr)
+            if rs % 2 == 0:
+                even_q.extend([rd for rd in rds if rd % 2 == 0])
+            else:
+                odd_q.extend([rd for rd in rds if rd % 2 == 1])
+        return sorted(set(even_q)), sorted(set(odd_q))
+
+    # ========= Live Allocation Display =========
+    def _collect_rd_counts(self) -> OrderedDict:
+        c = Counter()
+        for it in self.items:
+            if isinstance(it, Block):
+                for v in it.cell_numbers.values():
+                    s = str(v).strip()
+                    if s == "":
+                        continue
+                    try:
+                        n = int(float(s))
+                        c[n] += 1
+                    except Exception:
+                        continue
+        pairs = sorted(((k, v) for k, v in c.items()), key=lambda x: x[0])
+        return OrderedDict(pairs)
+
+    def _build_rs_summary(self, rs_indices: List[int], rd_counts: Dict[int, int]) -> str:
+        try:
+            rpr = int(float(self.rd_per_rs.get() or 0))
+        except Exception:
+            rpr = 0
+        lines = []
+        for rs in rs_indices:
+            rd_list = self._rd_list_for_rs(rs, rpr)
+            total = sum(rd_counts.get(rd, 0) for rd in rd_list) if rd_list else 0
+            lines.append(f"RS-{rs}: total {total}")
+            printed = False
+            for rd in rd_list:
+                cnt = rd_counts.get(rd, 0)
+                if cnt > 0:
+                    lines.append(f"  RD-{rd}: {cnt}")
+                    printed = True
+            if not printed:
+                lines.append("  -")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    def _update_allocation_display(self):
+        try:
+            rs_total = max(0, int(float(self.rs_count.get() or 0)))
+        except Exception:
+            rs_total = 0
+        even_rs = [i for i in range(1, rs_total + 1) if i % 2 == 0]  # PORT
+        odd_rs  = [i for i in range(1, rs_total + 1) if i % 2 == 1]  # STBD
+        rd_counts = self._collect_rd_counts()
+        txt_even = self._build_rs_summary(even_rs, rd_counts)
+        txt_odd  = self._build_rs_summary(odd_rs, rd_counts)
+        self.txt_even.configure(state="normal"); self.txt_even.delete("1.0", tk.END)
+        self.txt_even.insert(tk.END, txt_even);   self.txt_even.configure(state="disabled")
+        self.txt_odd.configure(state="normal");  self.txt_odd.delete("1.0", tk.END)
+        self.txt_odd.insert(tk.END, txt_odd);    self.txt_odd.configure(state="disabled")
+
+    def _recompute_all(self, *args):
+        self._update_allocation_display()
+
+    # ---------- Canvas helpers ----------
+    def pick_color(self):
+        initial = self.current_color.get() or "#87CEFA"
+        _, hx = colorchooser.askcolor(color=initial, title="Pick Color")
+        if hx:
+            self.current_color.set(hx)
+            self.color_preview.config(bg=hx)
+            self.draw_all()
+            self._recompute_all()
+
+    def clear_canvas(self):
+        self.cell_colors.clear(); self.cell_numbers.clear(); self.sockets.clear()
+        self.draw_all(); self._recompute_all()
+
+    # ---------- geometry ----------
+    def cell_to_xy(self, r: int, c: int) -> tuple[int, int, int, int]:
+        x1 = (c - 1) * self.cell_px + 1
+        y1 = (r - 1) * self.cell_px + 1
+        x2 = c * self.cell_px + 1
+        y2 = r * self.cell_px + 1
+        return x1, y1, x2, y2
+
+    def xy_to_cell(self, x: int, y: int) -> Optional[Cell]:
+        if x < 1 or y < 1:
+            return None
+        c = int((x - 1) // self.cell_px) + 1
+        r = int((y - 1) // self.cell_px) + 1
+        if 1 <= r <= self.rows and 1 <= c <= self.cols:
+            return (r, c)
+        return None
+
+    # ---------- drawing ----------
+    def draw_all(self):
+        self.canvas.delete("all")
+        for r in range(1, self.rows + 1):
+            for c in range(1, self.cols + 1):
+                x1, y1, x2, y2 = self.cell_to_xy(r, c)
+                fill = self.cell_colors.get((r, c), "#FFFFFF")
+                self.canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline="#999999", width=1)
+        for (r, c) in self.sockets:
+            if 1 <= r <= self.rows and 1 <= c <= self.cols:
+                x1, y1, x2, y2 = self.cell_to_xy(r, c)
+                self.canvas.create_rectangle(x1 + 1, y1 + 1, x2 - 1, y2 - 1, outline="#FF0000", width=2)
+        for i in range(self.rows + 1):
+            y = i * self.cell_px + 1
+            self.canvas.create_line(1, y, self.cols * self.cell_px + 1, y, fill="#BBBBBB")
+        for j in range(self.cols + 1):
+            x = j * self.cell_px + 1
+            self.canvas.create_line(x, 1, x, self.rows * self.cell_px + 1, fill="#BBBBBB")
+        for (r, c), val in self.cell_numbers.items():
+            if 1 <= r <= self.rows and 1 <= c <= self.cols:
+                x1, y1, x2, y2 = self.cell_to_xy(r, c)
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                self.canvas.create_text(cx, cy, text=str(val), font=("Arial", max(8, self.cell_px // 2)), fill="#000000")
+
+    # ---------- mouse (좌클릭: 채우기) ----------
+    def on_press(self, e):
+        cell = self.xy_to_cell(e.x, e.y)
+        if not cell: return
+        self.drag_start = cell; self.update_drag_rect(cell, cell)
+
+    def on_drag(self, e):
+        if not self.drag_start: return
+        cell = self.xy_to_cell(e.x, e.y)
+        if not cell: return
+        self.update_drag_rect(self.drag_start, cell)
+
+    def on_release(self, e):
+        if not self.drag_start: return
+        end_cell = self.xy_to_cell(e.x, e.y) or self.drag_start
+        (r1, c1) = self.drag_start; (r2, c2) = end_cell
+        rr1, rr2 = sorted((r1, r2)); cc1, cc2 = sorted((c1, c2))
+        mode = (self.paint_mode.get() or "").strip().upper()
+        for r in range(rr1, rr2 + 1):
+            for c in range(cc1, cc2 + 1):
+                pos = (r, c)
+                if mode == "ADD COLOR":
+                    self.cell_colors[pos] = self.current_color.get() or "#87CEFA"
+                elif mode == "ADD NUMBER":
+                    txt = self.current_label.get().strip()
+                    if txt != "":
+                        self.cell_numbers[pos] = parse_number_like(txt)
+                elif mode == "ERASER":
+                    self.cell_colors.pop(pos, None); self.cell_numbers.pop(pos, None); self.sockets.discard(pos)
+                elif mode == "SOCKET":
+                    self.sockets.add(pos)
+        self.drag_start = None
+        if self.drag_rect_id: self.canvas.delete(self.drag_rect_id); self.drag_rect_id = None
+        self.draw_all(); self._recompute_all()
+
+    def update_drag_rect(self, start: Cell, current: Cell):
+        (r1, c1) = start; (r2, c2) = current
+        rr1, rr2 = sorted((r1, r2)); cc1, cc2 = sorted((c1, c2))
+        x1, y1, _, _ = self.cell_to_xy(rr1, cc1); _, _, x2, y2 = self.cell_to_xy(rr2, cc2)
+        if self.drag_rect_id: self.canvas.delete(self.drag_rect_id)
+        self.drag_rect_id = self.canvas.create_rectangle(x1, y1, x2, y2, outline="#3B82F6", width=2, dash=(4, 2))
+
+    # ---------- mouse (우클릭: 현재 모드만 지우기) ----------
+    def _erase_by_mode_rect(self, rr1: int, rr2: int, cc1: int, cc2: int):
+        mode = (self.paint_mode.get() or "").strip().upper()
+        for r in range(rr1, rr2 + 1):
+            for c in range(cc1, cc2 + 1):
+                pos = (r, c)
+                if mode == "ADD COLOR": self.cell_colors.pop(pos, None)
+                elif mode == "ADD NUMBER": self.cell_numbers.pop(pos, None)
+                elif mode == "SOCKET": self.sockets.discard(pos)
+                elif mode == "ERASER":
+                    self.cell_colors.pop(pos, None); self.cell_numbers.pop(pos, None); self.sockets.discard(pos)
+
+    def on_press_right(self, e):
+        cell = self.xy_to_cell(e.x, e.y)
+        if not cell: return
+        self.drag_start_right = cell; self.update_drag_rect_right(cell, cell)
+
+    def on_drag_right(self, e):
+        if not self.drag_start_right: return
+        cell = self.xy_to_cell(e.x, e.y)
+        if not cell: return
+        self.update_drag_rect_right(self.drag_start_right, cell)
+
+    def on_release_right(self, e):
+        if not self.drag_start_right: return
+        end_cell = self.xy_to_cell(e.x, e.y) or self.drag_start_right
+        (r1, c1) = self.drag_start_right; (r2, c2) = end_cell
+        rr1, rr2 = sorted((r1, r2)); cc1, cc2 = sorted((c1, c2))
+        self._erase_by_mode_rect(rr1, rr2, cc1, cc2)
+        self.drag_start_right = None
+        if self.drag_rect_id_right: self.canvas.delete(self.drag_rect_id_right); self.drag_rect_id_right = None
+        self.draw_all(); self._recompute_all()
+
+    def update_drag_rect_right(self, start: Cell, current: Cell):
+        (r1, c1) = start; (r2, c2) = current
+        rr1, rr2 = sorted((r1, r2)); cc1, cc2 = sorted((c1, c2))
+        x1, y1, _, _ = self.cell_to_xy(rr1, cc1); _, _, x2, y2 = self.cell_to_xy(rr2, cc2)
+        if self.drag_rect_id_right: self.canvas.delete(self.drag_rect_id_right)
+        self.drag_rect_id_right = self.canvas.create_rectangle(x1, y1, x2, y2, outline="#6B7280", width=2, dash=(4, 2))
+
+    # ------- items / editor -------
+    def _write_gang_counts(self, gang_counts: Dict[int, int]):
+        for g in range(3, 10): self.gang_vars[g].set(str(gang_counts.get(g, 0)))
+
+    def item_label(self, it: Item, idx: int) -> str:
+        if isinstance(it, SectionHeader): return f"[Section] {it.title}"
+        b: Block = it
+        label_text = f"Hatch:{b.hatch}" if b.hatch else (f"Hold:{b.hold}" if b.hold else "-")
+        return f"Block {idx} — {b.rows}x{b.cols} | {label_text} Bay:{b.bay or '-'} Deck:{b.deck or '-'} | nums:{len(b.cell_numbers)} sockets:{len(b.sockets)}"
+
+    def refresh_list(self):
+        self.items_list.delete(0, tk.END)
+        for i, it in enumerate(self.items, start=1): self.items_list.insert(tk.END, self.item_label(it, i))
+        self._update_insert_spin_range(); self._recompute_all()
+
+    def _update_insert_spin_range(self):
+        total = max(1, len(self.items) + 1)
+        self.pos_spin.config(to=total)
+        sel = self.items_list.curselection()
+        default_pos = (sel[0] + 1) if sel else total
+        self.insert_pos.set(str(default_pos))
+
+    def edit_selected(self):
+        sel = self.items_list.curselection()
+        if not sel: messagebox.showinfo("Select", "편집할 블럭을 선택하세요."); return
+        idx = sel[0]; it = self.items[idx]
+        if isinstance(it, SectionHeader): messagebox.showinfo("Section", "섹션 헤더는 편집할 수 없습니다."); return
+        self.editing_index = idx
+        b: Block = it
+        self.rows, self.cols = b.rows, b.cols; self.cell_px = 22
+        self.cell_colors = dict(b.cell_colors); self.cell_numbers = dict(b.cell_numbers); self.sockets = set(b.sockets)
+        self._write_gang_counts(b.gang_counts)
+        if b.hold and not b.hatch: self.meta_label_type.set("Hold No"); self.meta_no.set(b.hold)
+        else: self.meta_label_type.set("Hatch No"); self.meta_no.set(b.hatch)
+        self.meta_bay.set(b.bay); self.meta_deck.set(b.deck)
+        self.draw_all(); self.winfo_toplevel().title("Reefer Layout — [Editing Block…]")
+
+    def save_edits(self):
+        if self.editing_index is None: messagebox.showinfo("Not Editing", "현재 편집 중인 블럭이 없습니다."); return
+        it = self.items[self.editing_index]
+        if isinstance(it, SectionHeader): messagebox.showinfo("Section", "섹션은 저장 대상이 아닙니다."); return
+        b: Block = it
+        b.cell_colors = dict(self.cell_colors); b.cell_numbers = dict(self.cell_numbers); b.sockets = set(self.sockets)
+        b.gang_counts = {g: int(float(self.gang_vars[g].get() or 0)) for g in range(3,10)}
+        self.items[self.editing_index] = b
+        self.refresh_list(); self.editing_index = None; self.winfo_toplevel().title("Reefer Layout")
+        messagebox.showinfo("Saved", "선택 블럭이 수정되었습니다.")
+
+    def delete_selected(self):
+        sel = self.items_list.curselection()
+        if not sel: return
+        del self.items[sel[0]]; self.refresh_list()
+
+    def apply_meta_to_selected(self):
+        sel = self.items_list.curselection()
+        if not sel: messagebox.showinfo("Select", "메타를 적용할 블럭이 선택되지 않았습니다."); return
+        idx = sel[0]; it = self.items[idx]
+        if isinstance(it, SectionHeader): messagebox.showinfo("Section", "섹션에는 메타를 적용할 수 없습니다."); return
+        b: Block = it
+        mode = (self.meta_label_type.get() or "Hatch No").strip(); num = (self.meta_no.get() or "").strip()
+        if mode == "Hold No": b.hold = num; b.hatch = ""
+        else: b.hatch = num; b.hold = ""
+        b.bay  = (self.meta_bay.get() or "").strip(); b.deck = (self.meta_deck.get() or "").strip()
+        self.items[idx] = b; self.refresh_list(); messagebox.showinfo("Meta", "선택 블럭의 메타 정보가 적용되었습니다.")
+
+    def insert_section_at(self, title: str):
+        try: pos_1based = int(self.insert_pos.get())
+        except Exception: pos_1based = len(self.items) + 1
+        pos_1based = max(1, min(len(self.items) + 1, pos_1based)); insert_idx = pos_1based - 1
+        self.items.insert(insert_idx, SectionHeader(title=title)); self.refresh_list()
+        self.items_list.selection_clear(0, tk.END); self.items_list.selection_set(insert_idx); self.items_list.see(insert_idx)
+
+    # ------- Import from Excel -------
+    def import_from_excel(self):
+        from zipfile import BadZipFile
+        from openpyxl.utils.exceptions import InvalidFileException
+
+        path = filedialog.askopenfilename(
+            filetypes=[("Excel (xlsx, xlsm)", "*.xlsx *.xlsm"), ("모든 파일", "*.*")],
+            title="Import Excel"
+        )
+        if not path: return
+        lower = path.lower()
+        if not (lower.endswith(".xlsx") or lower.endswith(".xlsm")):
+            messagebox.showerror("형식 오류", "이 기능은 .xlsx 또는 .xlsm 파일만 지원합니다.")
+            return
+        try:
+            wb = load_workbook(path, data_only=True); ws = wb.active
+        except BadZipFile:
+            messagebox.showerror("파일 손상/형식 오류", "zip 구조가 아닙니다. 엑셀로 열어 .xlsx로 다시 저장하세요.")
+            return
+        except InvalidFileException as e:
+            messagebox.showerror("읽기 실패", f"엑셀 파일을 열 수 없습니다:\n{e}")
+            return
+        except Exception as e:
+            messagebox.showerror("읽기 실패", f"엑셀을 열 수 없습니다:\n{e}")
+            return
+
+        added = 0; skipped = 0; rows_data: List[tuple] = []
+        for row in ws.iter_rows(min_row=1, values_only=True):
+            if row is None or len(row) < 2: continue
+            group_val = row[0]; num_str = row[1]
+            try: _ = int(float(str(group_val).strip()))
+            except Exception: continue
+            if num_str is None: continue
+            rows_data.append((int(float(str(group_val).strip())), str(num_str)))
+        rows_data.sort(key=lambda x: x[0])
+        for _, num_str in rows_data:
+            parts = [p.strip() for p in str(num_str).replace("，", ",").split(",") if p.strip() != ""]
+            values: List[int] = []; ok = True
+            for p in parts:
+                try:
+                    v = int(float(p));
+                    if v <= 0: ok = False; break
+                    values.append(v)
+                except Exception:
+                    ok = False; break
+            if not ok or not values: skipped += 1; continue
+            top_to_bottom = values[:]
+            rows = len(top_to_bottom); cols = max(top_to_bottom)
+            cell_colors: Dict[Cell, str] = {}; active_fill = "#EEEEEE"
+            for r_idx, cnt in enumerate(top_to_bottom, start=1):
+                left_pad = (cols - cnt) // 2; start_c = 1 + left_pad
+                for k in range(cnt): cell_colors[(r_idx, start_c + k)] = active_fill
+            b = Block(rows=rows, cols=cols, cell_colors=cell_colors, cell_numbers={}, sockets=set(), gang_counts={g: 0 for g in range(3,10)})
+            self.items.append(b); added += 1
+        self.refresh_list()
+        msg = f"가져오기 완료: 블럭 {added}개";
+        if skipped: msg += f" (무시 {skipped}행: 잘못된 num 형식)"
+        messagebox.showinfo("Import Excel", msg)
+
+    # ====================== Auto Set: 규칙별 배치 (REVISED) ======================
+    def auto_set_groups(self):
+        # 대상 블럭
+        sel = self.items_list.curselection()
+        if sel and isinstance(self.items[sel[0]], Block):
+            targets = [self.items[sel[0]]]
+        else:
+            targets = [it for it in self.items if isinstance(it, Block)]
+        if not targets:
+            messagebox.showinfo("Auto Set", "대상 블럭이 없습니다.")
+            return
+
+        cap = simpledialog.askinteger("Auto Set", "RD panel 당 최대 컨테이너 수",
+                                      minvalue=3, maxvalue=9999, parent=self.winfo_toplevel())
+        if cap is None:
+            return
+
+        # RD 큐(좌=짝, 우=홀)
+        even_list, odd_list = self._build_rd_queues()
+        if not even_list and not odd_list:
+            messagebox.showwarning("Auto Set", "RS/RD 구성이 비어있습니다.")
+            return
+
+        rd_remaining = {rd: cap for rd in (even_list + odd_list)}
+        cur_even = [0]; cur_odd = [0]
+        window = 4  # RD 거의-순서 허용 폭
+
+        for b in targets:
+            # 초기화
+            b.cell_numbers.clear()
+            b.gang_counts = {g: 0 for g in range(3,10)}
+            active = {(r,c) for (r,c) in b.cell_colors}
+            if not active:
+                continue
+
+            center_col = (b.cols + 1) / 2.0 # Use float for precise center
+            left_active  = {p for p in active if p[1] < center_col}
+            right_active = {p for p in active if p[1] > center_col}
+            # Handle cells exactly on the center line
+            center_cells = {p for p in active if p[1] == center_col}
+            if center_cells:
+                # Distribute center cells to the side with fewer cells to balance the load
+                if len(left_active) <= len(right_active):
+                    left_active.update(center_cells)
+                else:
+                    right_active.update(center_cells)
+
+
+            # 분기: 행 수에 따라 다른 전략 사용
+            if b.rows >= 6:
+                # 행 ≥ 6: 가장자리→안쪽, 직선 슬라이스 (기존 방식 유지)
+                self._place_edge_fill_on_side(
+                    b=b, side_active=right_active,
+                    allowed_rds=odd_list, rd_remaining=rd_remaining,
+                    cursor_box=cur_odd, window=window, from_edge="RIGHT"
+                )
+                self._place_edge_fill_on_side(
+                    b=b, side_active=left_active,
+                    allowed_rds=even_list, rd_remaining=rd_remaining,
+                    cursor_box=cur_even, window=window, from_edge="LEFT"
+                )
+            else:
+                # 행 < 6: 새로운 'Greedy Tiling' 알고리즘으로 효율적 배치
+                self._place_greedy_tiling_on_side(
+                    b=b, side_active=right_active,
+                    allowed_rds=odd_list, rd_remaining=rd_remaining,
+                    cursor_box=cur_odd, window=window, from_edge="RIGHT"
+                )
+                self._place_greedy_tiling_on_side(
+                    b=b, side_active=left_active,
+                    allowed_rds=even_list, rd_remaining=rd_remaining,
+                    cursor_box=cur_even, window=window, from_edge="LEFT"
+                )
+
+        # 현재 편집 중인 블럭이 있다면 캔버스 바로 업데이트
+        if self.editing_index is not None and self.items[self.editing_index] in targets:
+             self.cell_colors = dict(self.items[self.editing_index].cell_colors)
+             self.cell_numbers = dict(self.items[self.editing_index].cell_numbers)
+
+        self.draw_all()
+        self._recompute_all()
+        self.refresh_list()
+        messagebox.showinfo("Auto Set", "완료!\n(행≥6: 직선 그룹핑 / 행<6: 모양 타일링)")
+
+    # ---------- (행≥6) 가장자리 슬라이스: 빈칸 없이 꽉 채우기 (기존 유지) ----------
+    def _place_edge_fill_on_side(self, b: Block, side_active: set,
+                                 allowed_rds: List[int], rd_remaining: Dict[int,int],
+                                 cursor_box: List[int], window: int, from_edge: str):
+        if not side_active:
+            return
+
+        def rd_take(need: int) -> Optional[int]:
+            n = len(allowed_rds); i = cursor_box[0]
+            # 1. Look in the immediate window
+            for j in range(i, min(n, i + window)):
+                rd = allowed_rds[j]
+                if rd_remaining.get(rd, 0) >= need:
+                    rd_remaining[rd] -= need
+                    # Advance cursor past any depleted RDs
+                    while cursor_box[0] < n and rd_remaining.get(allowed_rds[cursor_box[0]], 0) == 0:
+                        cursor_box[0] += 1
+                    return rd
+            # 2. Look beyond the window if nothing was found
+            for j in range(i + window, n):
+                rd = allowed_rds[j]
+                if rd_remaining.get(rd, 0) >= need:
+                    rd_remaining[rd] -= need
+                    return rd
+            return None
+
+        def pick_color(cells:set) -> str:
+            palette = ["#87CEFA","#F6BD60","#F28482","#84A59D","#B8E1DD","#E5989B","#BFD200","#FFBE0B","#9B5DE5","#00BBF9","#00F5D4","#F15BB5","#E9C46A","#2A9D8F","#90BE6D"]
+            adj = set()
+            for (r,c) in cells:
+                for q in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
+                    if q in b.cell_colors: adj.add(b.cell_colors[q])
+            for col in palette:
+                if col not in adj: return col
+            return random.choice(palette)
+
+        rows = sorted({r for (r, _) in side_active})
+        spans_per_row: Dict[int, List[Tuple[int,int]]] = {}
+        for r in rows:
+            cols = sorted(c for (rr,c) in side_active if rr == r)
+            seq=[]
+            if cols:
+                s=e=cols[0]
+                for c in cols[1:]:
+                    if c==e+1: e=c
+                    else: seq.append((s,e)); s=e=c
+                seq.append((s,e))
+            spans_per_row[r] = seq
+
+        sizes_pref = [9,8,7,6,5,4,3]
+        def partition_len(L:int) -> List[int]:
+            res=[]; remain=L
+            while remain>0:
+                picked=None
+                for s in sizes_pref:
+                    if s<=remain and (remain-s == 0 or remain-s >= 3):
+                        picked=s; break
+                if picked is None:
+                    if remain > 0 and remain < 3: # Cannot partition further
+                        # Try to backtrack and adjust previous piece
+                        if res:
+                            last_piece = res.pop()
+                            remain += last_piece
+                            # Find a smaller piece that leaves a valid remainder
+                            found_alternative = False
+                            for s_alt in range(last_piece - 1, 2, -1):
+                                if s_alt <= remain and (remain - s_alt == 0 or remain - s_alt >= 3):
+                                    picked = s_alt
+                                    found_alternative = True
+                                    break
+                            if not found_alternative:
+                                res.append(last_piece) # put it back
+                                break # give up
+                        else:
+                            break # give up
+                    elif remain >= 3:
+                        picked = min(sizes_pref, key=lambda s: abs(s - remain))
+                        picked = min(picked, remain)
+                    else:
+                        break
+                if picked: res.append(picked); remain -= picked
+                else: break
+            return res
+
+        for r in rows:
+            for (c0, c1) in spans_per_row.get(r, []):
+                span_len = c1 - c0 + 1
+                pieces = partition_len(span_len)
+                if from_edge.upper() == "LEFT":
+                    left_ptr = c0
+                    for sz in pieces:
+                        cells = {(r, c) for c in range(left_ptr, left_ptr + sz)}
+                        rd = rd_take(sz)
+                        if rd is None: left_ptr += sz; continue
+                        color = pick_color(cells)
+                        for rc in cells: b.cell_numbers[rc] = rd; b.cell_colors[rc]  = color
+                        b.gang_counts[sz] = b.gang_counts.get(sz, 0) + 1
+                        left_ptr += sz
+                else: # RIGHT
+                    right_ptr = c1
+                    for sz in pieces:
+                        cells = {(r, c) for c in range(right_ptr - sz + 1, right_ptr + 1)}
+                        rd = rd_take(sz)
+                        if rd is None: right_ptr -= sz; continue
+                        color = pick_color(cells)
+                        for rc in cells: b.cell_numbers[rc] = rd; b.cell_colors[rc]  = color
+                        b.gang_counts[sz] = b.gang_counts.get(sz, 0) + 1
+                        right_ptr -= sz
+
+
+    # ---------- (행<6 전용) Greedy Tiling 알고리즘 (NEW) ----------
+    def _place_greedy_tiling_on_side(self, b: Block, side_active: set,
+                                     allowed_rds: List[int], rd_remaining: Dict[int, int],
+                                     cursor_box: List[int], window: int, from_edge: str):
+        if not side_active:
+            return
+
+        def rd_take(need: int) -> Optional[int]:
+            n = len(allowed_rds); i = cursor_box[0]
+            for j in range(i, min(n, i + window)):
+                rd = allowed_rds[j]
+                if rd_remaining.get(rd, 0) >= need:
+                    rd_remaining[rd] -= need
+                    while cursor_box[0] < n and rd_remaining.get(allowed_rds[cursor_box[0]], 0) == 0:
+                        cursor_box[0] += 1
+                    return rd
+            for j in range(i + window, n):
+                rd = allowed_rds[j]
+                if rd_remaining.get(rd, 0) >= need:
+                    rd_remaining[rd] -= need
+                    return rd
+            return None
+
+        def pick_color(cells: set) -> str:
+            palette = ["#87CEFA","#F6BD60","#F28482","#84A59D","#B8E1DD","#E5989B","#BFD200","#FFBE0B","#9B5DE5","#00BBF9","#00F5D4","#F15BB5","#E9C46A","#2A9D8F","#90BE6D"]
+            adj = set()
+            for (r,c) in cells:
+                for q in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]:
+                    if q in b.cell_colors: adj.add(b.cell_colors[q])
+            for col in palette:
+                if col not in adj: return col
+            return random.choice(palette)
+
+        # 처리할 셀들의 순서를 정한다 (위->아래, 그리고 각 행에서는 가장자리->안쪽)
+        is_from_left = (from_edge.upper() == "LEFT")
+        sorted_cells = sorted(list(side_active), key=lambda p: (p[0], p[1] if is_from_left else -p[1]))
+
+        placed_cells = set()
+
+        for r_start, c_start in sorted_cells:
+            if (r_start, c_start) in placed_cells:
+                continue
+
+            # 이 셀을 기준으로 최적의 모양을 찾는다.
+            best_fit = None
+            
+            # 큰 그룹부터 작은 그룹 순으로 시도
+            for size in sorted(SHAPE_LIBRARY.keys(), reverse=True):
+                if best_fit: break # 이미 찾았으면 더 작은 사이즈는 볼 필요 없음
+                
+                # 같은 사이즈 내에서 여러 모양 시도
+                for shape_pattern in SHAPE_LIBRARY[size]:
+                    current_cells = set()
+                    is_valid = True
+                    for r_off, c_off in shape_pattern:
+                        # from_edge에 따라 좌우 반전 적용
+                        final_c_off = c_off if is_from_left else -c_off
+                        cell_to_check = (r_start + r_off, c_start + final_c_off)
+
+                        # 이 셀이 유효한가? (side_active에 있고, 아직 배치되지 않았는가?)
+                        if cell_to_check not in side_active or cell_to_check in placed_cells:
+                            is_valid = False
+                            break
+                        current_cells.add(cell_to_check)
+
+                    if is_valid:
+                        best_fit = (size, current_cells)
+                        break # 이 사이즈에서 모양을 찾았으므로 다음 모양은 생략
+
+            if best_fit:
+                fit_size, fit_cells = best_fit
+                rd = rd_take(fit_size)
+                if rd is not None:
+                    color = pick_color(fit_cells)
+                    for cell in fit_cells:
+                        b.cell_numbers[cell] = rd
+                        b.cell_colors[cell] = color
+                        placed_cells.add(cell)
+                    b.gang_counts[fit_size] = b.gang_counts.get(fit_size, 0) + 1
+
+    # ------- Export -------
+    def export_excel(self):
+        if not self.items: messagebox.showinfo("No Content", "블럭 또는 섹션을 추가하세요."); return
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Workbook", "*.xlsx")], title="Save Excel File")
+        if not path: return
+        try:
+            write_excel(self.items, path, ship_no=self.ship_no.get().strip(), looking_text=self.looking_txt.get().strip() or "LOOKING TO FWD")
+            messagebox.showinfo("Done", f"Saved:\n{path}")
+            root = self.winfo_toplevel(); root.after(0, root.destroy)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+# ---- App ----
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Reefer Layout — Auto Set (행≥6: 직선 / 행<6: 모양 타일링)")
+        try:
+            from ctypes import windll; windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+        self.geometry("1280x900"); self.minsize(1100, 720)
+        GridCanvas(self).pack(fill="both", expand=True)
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
