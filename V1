@@ -34,6 +34,47 @@ class SectionHeader:
 
 Item = Union[Block, SectionHeader]
 
+
+# --------------------------------
+# IDEAL SHAPE LIBRARY (USER DEFINED)
+# --------------------------------
+IDEAL_SHAPE_LIBRARY: Dict[int, List[List[Cell]]] = {
+    9: [
+        # 기본 모양
+        [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)],  # 3x3
+        # 사용자가 추가한 모양
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1), (4, 0)],
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1), (4, 1)],
+        [(0, 0), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2), (3, 0), (3, 1)],
+        [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2), (3, 0)],
+        [(0, 1), (0, 2), (0, 3), (0, 4), (1, 0), (1, 1), (1, 2), (1, 3), (1, 4)],
+        [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 1), (1, 2), (1, 3), (1, 4)],
+    ],
+    8: [
+        # 기본 모양
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)],  # 2x4
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],  # 4x2
+    ],
+    7: [
+        # 사용자가 추가한 모양
+        [(0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],
+        [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 1)],
+        [(0, 0), (0, 1), (0, 2), (0, 3), (1, 1), (1, 2), (1, 3)],
+        [(0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)],
+    ],
+    6: [
+        [(0,0),(0,1),(0,2),(1,0),(1,1),(1,2)], # 2x3
+        [(0,0),(0,1),(1,0),(1,1),(2,0),(2,1)]  # 3x2
+    ],
+    5: [
+        # 1자 모양 제외
+    ],
+    4: [
+        [(0,0),(0,1),(1,0),(1,1)], # 2x2
+    ]
+}
+
+
 # --------------------------------
 # Utils
 # --------------------------------
@@ -405,57 +446,33 @@ class GridCanvas(ttk.Frame):
         ttk.Button(sec, text="Insert E/R CASING", command=lambda: self.insert_section_at("E/R CASING")).grid(row=0, column=3, padx=4, pady=2)
     
     def _save_state_for_undo(self):
-        state = {
-            'items': copy.deepcopy(self.items),
-            'editing_index': self.editing_index,
-            'canvas': (copy.deepcopy(self.cell_colors), copy.deepcopy(self.cell_numbers), copy.deepcopy(self.sockets))
-        }
+        state = { 'items': copy.deepcopy(self.items), 'editing_index': self.editing_index, 'canvas': (copy.deepcopy(self.cell_colors), copy.deepcopy(self.cell_numbers), copy.deepcopy(self.sockets)) }
         self.undo_stack.append(state)
-        if len(self.undo_stack) > 10: # Limit undo history
-            self.undo_stack.pop(0)
+        if len(self.undo_stack) > 10: self.undo_stack.pop(0)
     
     def undo(self):
-        if not self.undo_stack:
-            messagebox.showinfo("Undo", "더 이상 되돌릴 작업이 없습니다.")
-            return
-        
-        state = self.undo_stack.pop()
-        self.items = state['items']
-        
+        if not self.undo_stack: messagebox.showinfo("Undo", "더 이상 되돌릴 작업이 없습니다."); return
+        state = self.undo_stack.pop(); self.items = state['items']
         if state['editing_index'] is not None:
-            self.editing_index = state['editing_index']
-            self.cell_colors, self.cell_numbers, self.sockets = state['canvas']
-            self.edit_selected()
+            self.editing_index = state['editing_index']; self.cell_colors, self.cell_numbers, self.sockets = state['canvas']; self.edit_selected()
         else:
-            self.cell_colors.clear(); self.cell_numbers.clear(); self.sockets.clear()
-            self.draw_all()
-
+            self.cell_colors.clear(); self.cell_numbers.clear(); self.sockets.clear(); self.draw_all()
         self.refresh_list()
 
     def clear_all(self):
         if messagebox.askyesno("Clear All", "모든 블럭과 작업 내용을 정말로 초기화하시겠습니까?"):
-            self._save_state_for_undo()
-            self.items.clear()
-            self.editing_index = None
-            self.clear_canvas()
-            self.refresh_list()
-            self.winfo_toplevel().title("Reefer Layout")
+            self._save_state_for_undo(); self.items.clear(); self.editing_index = None; self.clear_canvas(); self.refresh_list(); self.winfo_toplevel().title("Reefer Layout")
 
     def _recompute_all(self, *args): self._update_allocation_display()
     def _rd_list_for_rs(self, rs_index, rd_per_rs):
         if rd_per_rs <= 0 or rs_index <= 0: return []
-        if rs_index % 2 == 1:
-            block_idx = (rs_index - 1) // 2; start_odd = 1 + 2 * (block_idx * rd_per_rs)
-            return [start_odd + 2*i for i in range(rd_per_rs)]
-        else:
-            block_idx = (rs_index // 2) - 1; start_even = 2 + 2 * (block_idx * rd_per_rs)
-            return [start_even + 2*i for i in range(rd_per_rs)]
+        if rs_index % 2 == 1: block_idx = (rs_index - 1) // 2; start_odd = 1 + 2 * (block_idx * rd_per_rs); return [start_odd + 2*i for i in range(rd_per_rs)]
+        else: block_idx = (rs_index // 2) - 1; start_even = 2 + 2 * (block_idx * rd_per_rs); return [start_even + 2*i for i in range(rd_per_rs)]
     def _build_rd_queues(self):
         try: rs_total, rpr = int(self.rs_count.get() or 0), int(self.rd_per_rs.get() or 0)
         except(ValueError, TypeError): return [],[]
         even_q, odd_q = [], []
-        for rs in range(1, rs_total + 1):
-            (even_q if rs % 2 == 0 else odd_q).extend(self._rd_list_for_rs(rs, rpr))
+        for rs in range(1, rs_total + 1): (even_q if rs % 2 == 0 else odd_q).extend(self._rd_list_for_rs(rs, rpr))
         return sorted(list(set(even_q))), sorted(list(set(odd_q)))
     def _collect_rd_counts(self):
         c = Counter(int(v) for it in self.items if isinstance(it,Block) for v in it.cell_numbers.values() if str(v).strip())
@@ -616,6 +633,7 @@ class GridCanvas(ttk.Frame):
         if path:
             try: write_excel(self.items,path,self.ship_no.get(),self.looking_txt.get()); messagebox.showinfo("Exported",f"파일 저장 완료:\n{path}")
             except Exception as e: messagebox.showerror("Error",f"저장 실패:\n{e}")
+
     def auto_set_groups(self):
         self._save_state_for_undo()
         sel=self.items_list.curselection()
@@ -641,22 +659,23 @@ class GridCanvas(ttk.Frame):
                 self._place_flexible_fill(b,right_active,"RIGHT",rd_remaining,odd_list,cur_odd)
                 self._place_flexible_fill(b,left_active,"LEFT",rd_remaining,even_list,cur_even)
         if self.editing_index is not None: self.edit_selected()
-        self.refresh_list(); messagebox.showinfo("Auto Set","완료! (v13)")
+        self.refresh_list(); messagebox.showinfo("Auto Set","완료! (v15)")
 
     def _plan_gang_distribution(self, total_size: int) -> List[List[int]]:
-        results = []; gang_options = [9, 8, 7, 6, 5, 4]; memo = {}
+        memo = {}; gang_options = [9, 8, 7, 6, 5, 4]
         def find_combinations(remain):
             if remain == 0: return [[]]
-            if remain < 4: return []
+            if remain < 4: return None
             if remain in memo: return memo[remain]
             combs = []
             for size in gang_options:
                 if remain >= size:
                     sub_combs = find_combinations(remain - size)
-                    for sub_comb in sub_combs: combs.append([size] + sub_comb)
-            memo[remain] = combs
-            return combs
-        all_combinations = find_combinations(total_size)
+                    if sub_combs is not None:
+                        for sub_comb in sub_combs: combs.append([size] + sub_comb)
+            memo[remain] = combs if combs else None
+            return memo[remain]
+        all_combinations = find_combinations(total_size) or []
         all_combinations.sort(key=lambda x: (len(x), [-v for v in x]))
         return all_combinations
 
@@ -705,37 +724,30 @@ class GridCanvas(ttk.Frame):
         if not all_plans: return
 
         for plan in all_plans:
-            placed_cells = set()
-            temp_assignments = []
-            success = True
-            for target_size in plan:
-                found_group = None
-                is_left = edge == "LEFT"
-                search_order = sorted(list(side_active - placed_cells), key=lambda p: (p[0], p[1] if is_left else -p[1]))
-                for start_cell in search_order:
-                    q = deque([start_cell]); visited = {start_cell}; path = []
-                    while q:
-                        current = q.popleft(); path.append(current)
-                        if len(path) == target_size: break
-                        neighbors = [(current[0]+dr, current[1]+dc) for dr,dc in [(0,1),(0,-1),(1,0),(-1,0)]]
-                        for neighbor in neighbors:
-                            if neighbor in (side_active - placed_cells) and neighbor not in visited:
-                                temp_group = path + [neighbor]
-                                min_r, max_r = min(r for r,c in temp_group), max(r for r,c in temp_group)
-                                min_c, max_c = min(c for r,c in temp_group), max(c for r,c in temp_group)
-                                if max_r - min_r < 5 and max_c - min_c < 5:
-                                    visited.add(neighbor); q.append(neighbor)
-                    if len(path) == target_size: found_group = set(path); break
-                
-                if found_group:
-                    temp_assignments.append({'size': target_size, 'cells': found_group})
-                    placed_cells.update(found_group)
-                else:
-                    success = False
-                    break
+            solution = []
             
-            if success:
-                for assignment in temp_assignments:
+            def solve(p_idx, available_cells):
+                if p_idx == len(plan): return True
+                
+                target_size = plan[p_idx]
+                is_left = edge == "LEFT"
+                search_order = sorted(list(available_cells), key=lambda p: (p[0], p[1] if is_left else -p[1]))
+
+                for start_cell in search_order:
+                    for shape_pattern in IDEAL_SHAPE_LIBRARY.get(target_size, []):
+                        for flip in ([1, -1] if not is_left else [1]):
+                            r_start, c_start = start_cell
+                            group = {(r_start + r_off, c_start + (c_off * flip)) for r_off, c_off in shape_pattern}
+                            
+                            if group.issubset(available_cells):
+                                solution.append({'size': target_size, 'cells': group})
+                                if solve(p_idx + 1, available_cells - group):
+                                    return True
+                                solution.pop() # Backtrack
+                return False
+
+            if solve(0, side_active):
+                for assignment in solution:
                     size, cells = assignment['size'], assignment['cells']
                     rd = self._rd_take(size, rd_rem, rds, cursor)
                     if rd is not None:
@@ -747,7 +759,7 @@ class GridCanvas(ttk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Reefer Layout — Auto Set (v13: Final)")
+        self.title("Reefer Layout — Auto Set (v15: Ideal Shape Solver)")
         try:
             from ctypes import windll; windll.shcore.SetProcessDpiAwareness(1)
         except: pass
