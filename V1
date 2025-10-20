@@ -9,6 +9,7 @@ import copy
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
+from openpyxl.cell import Cell # Excel 수식 입력을 위해 추가
 
 # --------------------------------
 # Types & Models
@@ -122,6 +123,51 @@ def safe_sheet_title(s: str) -> str:
     clean_s = "".join(c if c not in invalid_chars else '-' for c in (s or "Sheet"))
     return clean_s[:31]
 
+# --- [Refactored Helper Functions] ---
+# (Moved from GridCanvas class)
+
+def _collect_rd_counts(items: List[Item]) -> OrderedDict:
+    """RD 번호별 총 개수를 집계합니다. (GUI용)"""
+    c = Counter(int(v) for it in items if isinstance(it,Block) for v in it.cell_numbers.values() if str(v).strip())
+    return OrderedDict(sorted(c.items()))
+
+def _rd_list_for_rs(rs_index, rd_per_rs):
+    """특정 RS 패널에 할당된 RD 번호 리스트를 반환합니다."""
+    if rd_per_rs <= 0 or rs_index <= 0: return []
+    if rs_index % 2 == 1:
+        # STBD (Odd)
+        block_idx = (rs_index - 1) // 2
+        start_odd = 1 + 2 * (block_idx * rd_per_rs)
+        return [start_odd + 2*i for i in range(rd_per_rs)]
+    else:
+        # PORT (Even)
+        block_idx = (rs_index // 2) - 1
+        start_even = 2 + 2 * (block_idx * rd_per_rs)
+        return [start_even + 2*i for i in range(rd_per_rs)]
+
+def _build_rd_queues(rs_total, rpr):
+    """PORT(Even)와 STBD(Odd)의 RD 대기열을 생성합니다."""
+    even_q, odd_q = [], []
+    for rs in range(1, rs_total + 1):
+        (even_q if rs % 2 == 0 else odd_q).extend(_rd_list_for_rs(rs, rpr))
+    return sorted(list(set(even_q))), sorted(list(set(odd_q)))
+
+def _build_rs_summary(rs_indices, rd_counts, rpr):
+    """GUI의 Live Summary 텍스트를 생성합니다."""
+    lines = []
+    for rs in rs_indices:
+        rd_list = _rd_list_for_rs(rs, rpr)
+        total = sum(rd_counts.get(rd, 0) for rd in rd_list)
+        lines.append(f"RS-{rs}: total {total}")
+        lines.extend([f"  RD-{rd}: {rd_counts[rd]}" for rd in rd_list if rd_counts.get(rd, 0) > 0])
+        if not any(rd_counts.get(rd, 0) > 0 for rd in rd_list):
+            lines.append("  -")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+# --- [End Refactored Helper Functions] ---
+
+
 # --------------------------------
 # Excel Writer
 # --------------------------------
@@ -130,6 +176,8 @@ def write_excel(
     filename: str,
     ship_no: str,
     looking_text: str = "LOOKING TO FWD",
+    rs_count_str: str = "0",
+    rd_per_rs_str: str = "0",
     row_gap_between_blocks: int = 2,
     info_cols: int = 1, gap_after_info: int = 1,
     deck_cols: int = 1, gap_after_deck: int = 1
@@ -151,7 +199,9 @@ def write_excel(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = safe_sheet_title(ship_no)
+    
+    sheet_name = safe_sheet_title(ship_no)
+    ws.title = sheet_name
 
     align_center = Alignment(horizontal="center", vertical="center")
     align_right  = Alignment(horizontal="right",  vertical="center")
@@ -217,6 +267,8 @@ def write_excel(
     sm.alignment = align_center; sm.fill = gray_fill
 
     cur_row = hrow + 1
+    data_start_row = cur_row 
+    
     vertical_thick_cols = set(thick_column_positions(max_grid_cols))
     last_used_row = cur_row
     grand_qty_ranges = []
@@ -231,7 +283,8 @@ def write_excel(
             scell = ws.cell(row=cur_row, column=grid_start_col, value=it.title)
             scell.alignment = align_center; scell.font = Font(size=24, bold=True)
             set_range_border(ws, cur_row, cur_row, grid_start_col, grid_right_col, dashed_med, dashed_med, dashed_med, dashed_med)
-            cur_row += 4; last_used_row = max(last_used_row, cur_row - 1)
+            cur_row += 4
+            last_used_row = max(last_used_row, cur_row - 1) # 갱신
             continue
 
         b: Block = it
@@ -256,7 +309,10 @@ def write_excel(
 
         for r in range(1, b.rows + 1):
             rr = cur_row + r - 1
-            ws.row_dimensions[rr].height = 20
+            # --- [MODIFIED] ---
+            # 셀 높이 20 -> 18로 축소
+            ws.row_dimensions[rr].height = 18 
+            # --- [END MODIFIED] ---
             for c in range(1, b.cols + 1):
                 global_grid_col = left_offset + c
                 cc = grid_start_col + global_grid_col - 1
@@ -293,7 +349,7 @@ def write_excel(
         gsum_cell.alignment = align_center; gsum_cell.font = Font(size=8, bold=True); gsum_cell.fill = gray_fill
 
         cur_row += max(b.rows, 2) + row_gap_between_blocks
-        last_used_row = max(last_used_row, cur_row - 1)
+        last_used_row = max(last_used_row, cur_row - 1) # 갱신
 
     grand_row = last_used_row + 2
     ws.cell(row=grand_row, column=(qty_col - 1), value="Total").alignment = align_right; ws.cell(row=grand_row, column=(qty_col-1)).font = Font(size=9, bold=True)
@@ -313,11 +369,237 @@ def write_excel(
 
     for gcol in vertical_thick_cols:
         col_idx = grid_start_col + gcol - 1
-        for r in range(3, last_used_row + 1):
+        for r in range(data_start_row, last_used_row + 1): 
             cell = ws.cell(row=r, column=col_idx)
             cell.border = Border(left=thick, right=cell.border.right, top=cell.border.top, bottom=cell.border.bottom)
 
+    # --- [START] Summary Sheet V5 Logic ---
+    try:
+        try: rs_total = int(rs_count_str or 0)
+        except ValueError: rs_total = 0
+        try: rpr = int(rd_per_rs_str or 0)
+        except ValueError: rpr = 0
+            
+        data_range_str = (
+            f"'{sheet_name}'!"
+            f"{get_column_letter(grid_start_col)}{data_start_row}:"
+            f"{get_column_letter(grid_right_col)}{last_used_row}"
+        )
+            
+        summary_ws = wb.create_sheet(title="Summary")
+        
+        # 헬퍼 함수 _write_summary_sheet_v5 호출
+        _write_summary_sheet_v5(
+            summary_ws, 
+            rs_total, 
+            rpr, 
+            data_range_str 
+        )
+    except Exception as e:
+        print(f"Error creating summary sheet: {e}")
+    # --- [END] Summary Sheet V5 Logic ---
+
     wb.save(filename)
+
+# --------------------------------
+# Summary Sheet Writer (V5 - Merged RS, No Grand Total, Smaller Font)
+# --------------------------------
+def _write_summary_sheet_v5(
+    ws, 
+    rs_total: int, 
+    rpr: int, 
+    data_range_str: str # 메인 시트의 데이터 범위
+):
+    """
+    (V5) RS/RD 병합, 폰트 축소, Grand Total 제거
+    """
+    
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.cell import Cell
+
+    # --- 1. 스타일 정의 (폰트 축소) ---
+    ws.font = Font(size=10) # 시트 기본 폰트 10
+    
+    bold_font = Font(size=10, bold=True)
+    title_font = Font(size=13, bold=True) # 14 -> 13
+    header_fill = PatternFill("solid", fgColor="DDEEFF")
+    total_fill = PatternFill("solid", fgColor="F0F0F0")
+    
+    # [MODIFIED] Alignment에 vertical="center" 추가
+    align_left = Alignment(horizontal="left", vertical="center")
+    align_right = Alignment(horizontal="right", vertical="center")
+    align_center = Alignment(horizontal="center", vertical="center")
+    
+    thin_side = Side(style="thin", color="000000")
+    table_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    
+    # --- 2. 헤더 및 열 너비 설정 ---
+    headers = ["RS", "RD", "REF. CON", "A", "BREAKER", "KVA"]
+    col_widths = [10, 10, 10, 10, 12, 12]
+    
+    # --- 3. 테이블 작성 헬퍼 함수 ---
+    def apply_styles(cell: Cell, font=None, fill=None, align=None, border=None, num_format=None):
+        """셀에 스타일을 적용하는 헬퍼"""
+        if font: cell.font = font
+        if fill: cell.fill = fill
+        if align: cell.alignment = align
+        if border: cell.border = border
+        if num_format: cell.number_format = num_format
+
+    def set_column_widths(c_offset: int):
+        """지정된 오프셋에 열 너비를 설정합니다."""
+        for i, width in enumerate(col_widths, 0):
+            ws.column_dimensions[get_column_letter(c_offset + i)].width = width
+    
+    # [MODIFIED] process_rs_list (RS/RD 병합, Grand Total 반환값 제거)
+    def process_rs_list(rs_list: list, s_row: int, c_offset: int) -> int:
+        """
+        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다.
+        (다음 시작 행) 반환
+        """
+        cur_row = s_row
+        
+        if rpr <= 0 or not rs_list:
+            # 데이터가 없는 경우
+            for i, h in enumerate(headers):
+                apply_styles(ws.cell(cur_row, c_offset+i), border=table_border)
+            ws.cell(cur_row, c_offset, "-")
+            cur_row += 1
+            return cur_row
+
+        for rs in rs_list:
+            rd_list = _rd_list_for_rs(rs, rpr)
+            rs_start_row = cur_row # Row where this RS block starts
+            
+            if not rd_list:
+                # --- RS 행 (RD 없음) ---
+                ws.merge_cells(start_row=cur_row, start_column=c_offset + 1, end_row=cur_row, end_column=c_offset + 5)
+                rs_cell = ws.cell(cur_row, c_offset, f"RS-{rs}")
+                apply_styles(rs_cell, font=bold_font, align=align_left, border=table_border)
+                
+                rd_cell = ws.cell(cur_row, c_offset + 1, "  (No RDs)")
+                apply_styles(rd_cell, align=align_left, border=table_border)
+                
+                # Apply borders to other merged cells
+                for i in range(2, 6): 
+                    apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
+                
+                cur_row += 1
+                rs_start_row_for_sum = -1 # Flag for no data
+            
+            else:
+                # --- RD 데이터 행 (수식 적용) ---
+                for rd in rd_list:
+                    ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}"
+                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}"
+
+                    # Col 0: RS (비워둠, 나중에 병합)
+                    apply_styles(ws.cell(cur_row, c_offset), border=table_border) # Border only
+                    
+                    # Col 1: RD
+                    rd_cell = ws.cell(cur_row, c_offset + 1, f"  RD-{rd}")
+                    apply_styles(rd_cell, align=align_left, border=table_border)
+                    
+                    # Col 2: REF. CON (수식 - COUNTIF)
+                    ref_cell = ws.cell(cur_row, c_offset + 2, value=f"=COUNTIF({data_range_str},{rd})")
+                    apply_styles(ref_cell, align=align_right, border=table_border, num_format='0')
+                    
+                    # Col 3: A (수식)
+                    a_cell = ws.cell(cur_row, c_offset + 3, value=f"={ref_con_cell_addr}*17.4*0.9")
+                    apply_styles(a_cell, align=align_right, border=table_border, num_format='0.00')
+
+                    # Col 4: BREAKER (수식)
+                    breaker_cell = ws.cell(cur_row, c_offset + 4, 
+                                         value=f'=IF({a_cell_addr}>=800,"1250/900",IF({a_cell_addr}>=700,"800/800","800/700"))')
+                    apply_styles(breaker_cell, align=align_center, border=table_border)
+                    
+                    # Col 5: KVA (수식)
+                    kva_cell = ws.cell(cur_row, c_offset + 5, value=f"={ref_con_cell_addr}*10.6")
+                    apply_styles(kva_cell, align=align_right, border=table_border, num_format='0.00')
+                    
+                    cur_row += 1
+                
+                # --- RS 열 병합 및 스타일 적용 (루프 끝난 후) ---
+                rs_end_row = cur_row - 1
+                ws.merge_cells(start_row=rs_start_row, start_column=c_offset, end_row=rs_end_row, end_column=c_offset)
+                rs_cell = ws.cell(rs_start_row, c_offset, f"RS-{rs}")
+                # align_center (vertical center 포함)
+                apply_styles(rs_cell, font=bold_font, align=align_center, border=table_border) 
+                
+                # 병합된 나머지 셀에도 테두리 적용
+                for r in range(rs_start_row + 1, rs_end_row + 1):
+                    apply_styles(ws.cell(r, c_offset), border=table_border)
+                    
+                rs_start_row_for_sum = rs_start_row # 합계 시작 행
+            
+            # --- RS-Total 행 (수식 적용) ---
+            total_label_cell = ws.cell(row=cur_row, column=c_offset, value=f"RS-{rs} Total")
+            apply_styles(total_label_cell, font=bold_font, align=align_left, fill=total_fill, border=table_border)
+            
+            apply_styles(ws.cell(cur_row, c_offset+1), fill=total_fill, border=table_border) # Col 1
+            
+            if rs_start_row_for_sum == -1: # RD가 없었던 경우
+                ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
+            else:
+                rs_end_row_for_sum = cur_row - 1 # 합계 마지막 행
+                ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
+                a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
+                kva_sum_formula = f"=SUM({get_column_letter(c_offset+5)}{rs_start_row_for_sum}:{get_column_letter(c_offset+5)}{rs_end_row_for_sum})"
+
+            ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
+            apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
+            
+            a_total_cell = ws.cell(cur_row, c_offset + 3, value=a_sum_formula)
+            apply_styles(a_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
+
+            apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border)
+
+            kva_total_cell = ws.cell(cur_row, c_offset + 5, value=kva_sum_formula)
+            apply_styles(kva_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
+            
+            cur_row += 1
+
+        return cur_row # 다음 시작 행
+    
+    # --- 4. 메인 실행 ---
+    
+    port_col_offset = 1 
+    port_title = "PORT" 
+    even_rs = [i for i in range(1, rs_total + 1) if i % 2 == 0]
+    
+    stbd_col_offset = port_col_offset + len(col_widths) + 1 
+    stbd_title = "STBD"
+    odd_rs  = [i for i in range(1, rs_total+1) if i % 2 == 1]
+
+    set_column_widths(port_col_offset)
+    set_column_widths(stbd_col_offset)
+    ws.column_dimensions[get_column_letter(port_col_offset + len(col_widths))].width = 3 # Gap
+    
+    ws.merge_cells(start_row=1, start_column=port_col_offset, end_row=1, end_column=port_col_offset + len(headers) - 1)
+    port_title_cell = ws.cell(row=1, column=port_col_offset, value=port_title)
+    apply_styles(port_title_cell, font=title_font, align=align_center)
+
+    ws.merge_cells(start_row=1, start_column=stbd_col_offset, end_row=1, end_column=stbd_col_offset + len(headers) - 1)
+    stbd_title_cell = ws.cell(row=1, column=stbd_col_offset, value=stbd_title)
+    apply_styles(stbd_title_cell, font=title_font, align=align_center)
+    
+    start_row = 2
+    for i, h in enumerate(headers):
+        port_h_cell = ws.cell(row=start_row, column=port_col_offset + i, value=h)
+        apply_styles(port_h_cell, font=bold_font, fill=header_fill, align=align_center, border=table_border)
+        
+        stbd_h_cell = ws.cell(row=start_row, column=stbd_col_offset + i, value=h)
+        apply_styles(stbd_h_cell, font=bold_font, fill=header_fill, align=align_center, border=table_border)
+
+    data_start_row = start_row + 1
+    
+    # [MODIFIED] Grand Total 반환값 받지 않음
+    port_next_row = process_rs_list(even_rs, data_start_row, port_col_offset)
+    stbd_next_row = process_rs_list(odd_rs, data_start_row, stbd_col_offset)
+    
+    # [REMOVED] Grand Total 생성 로직 전체 삭제
+    
 
 # --------------------------------
 # GUI
@@ -364,19 +646,23 @@ class GridCanvas(ttk.Frame):
         ttk.Label(cfg, text="RD per RS").grid(row=0, column=2, sticky="e", padx=5, pady=2)
         ttk.Spinbox(cfg, from_=0, to=999, textvariable=self.rd_per_rs, width=8).grid(row=0, column=3, sticky="w", pady=2)
 
+        # --- [GUI MOD] ---
+        # (Even / Odd) 텍스트가 제거된 버전으로 복원
         summary_frame = ttk.LabelFrame(right, text="Live Summary", padding=10)
-        summary_frame.pack(fill="both", expand=True)
+        summary_frame.pack(fill="both", expand=True, pady=(0, 10)) 
 
         self.grand_total_label = ttk.Label(summary_frame, text="Grand Total: 0", font=("Segoe UI", 9, "bold"))
         self.grand_total_label.pack(anchor="w", pady=(0, 5))
 
         alloc = ttk.Frame(summary_frame); alloc.pack(fill="both", expand=True)
         left_col = ttk.Frame(alloc); left_col.pack(side="left", fill="both", expand=True, padx=(0,5))
-        ttk.Label(left_col, text="PORT RS (Even)").pack(anchor="w")
+        ttk.Label(left_col, text="PORT RS").pack(anchor="w") # " (Even)" 제거
         self.txt_even = tk.Text(left_col, width=15, height=34, font=("Consolas", 10)); self.txt_even.pack(fill="both", expand=True); self.txt_even.configure(state="disabled")
+        
         right_col = ttk.Frame(alloc); right_col.pack(side="left", fill="both", expand=True, padx=(5,0))
-        ttk.Label(right_col, text="STBD RS (Odd)").pack(anchor="w")
+        ttk.Label(right_col, text="STBD RS").pack(anchor="w") # " (Odd)" 제거
         self.txt_odd = tk.Text(right_col, width=15, height=34, font=("Consolas", 10)); self.txt_odd.pack(fill="both", expand=True); self.txt_odd.configure(state="disabled")
+        # --- [END GUI MOD] ---
 
         top = ttk.Frame(left); top.pack(fill="x", pady=(0, 10))
         ttk.Label(top, text="Ship No.").grid(row=0, column=0, padx=(4,4), pady=2, sticky="e")
@@ -467,7 +753,7 @@ class GridCanvas(ttk.Frame):
         self.cell_colors, self.cell_numbers, self.sockets = state['canvas_data']
 
         if self.editing_index is not None:
-             self.edit_selected() # Reload editor if it was active
+            self.edit_selected() # Reload editor if it was active
         else:
             self.draw_all()
 
@@ -486,67 +772,32 @@ class GridCanvas(ttk.Frame):
     def _recompute_all(self, *args):
         self._update_allocation_display()
 
-    def _rd_list_for_rs(self, rs_index, rd_per_rs):
-        if rd_per_rs <= 0 or rs_index <= 0: return []
-        if rs_index % 2 == 1:
-            block_idx = (rs_index - 1) // 2
-            start_odd = 1 + 2 * (block_idx * rd_per_rs)
-            return [start_odd + 2*i for i in range(rd_per_rs)]
-        else:
-            block_idx = (rs_index // 2) - 1
-            start_even = 2 + 2 * (block_idx * rd_per_rs)
-            return [start_even + 2*i for i in range(rd_per_rs)]
-
-    def _build_rd_queues(self):
-        try:
-            rs_total = int(self.rs_count.get() or 0)
-            rpr = int(self.rd_per_rs.get() or 0)
-        except(ValueError, TypeError):
-            return [], []
-        even_q, odd_q = [], []
-        for rs in range(1, rs_total + 1):
-            (even_q if rs % 2 == 0 else odd_q).extend(self._rd_list_for_rs(rs, rpr))
-        return sorted(list(set(even_q))), sorted(list(set(odd_q)))
-
-    def _collect_rd_counts(self):
-        c = Counter(int(v) for it in self.items if isinstance(it,Block) for v in it.cell_numbers.values() if str(v).strip())
-        return OrderedDict(sorted(c.items()))
-
-    def _build_rs_summary(self, rs_indices, rd_counts):
-        try:
-            rpr = int(self.rd_per_rs.get() or 0)
-        except(ValueError, TypeError):
-            rpr = 0
-        lines = []
-        for rs in rs_indices:
-            rd_list = self._rd_list_for_rs(rs, rpr)
-            total = sum(rd_counts.get(rd, 0) for rd in rd_list)
-            lines.append(f"RS-{rs}: total {total}")
-            lines.extend([f"  RD-{rd}: {rd_counts[rd]}" for rd in rd_list if rd_counts.get(rd, 0) > 0])
-            if not any(rd_counts.get(rd, 0) > 0 for rd in rd_list):
-                lines.append("  -")
-            lines.append("")
-        return "\n".join(lines).rstrip()
-
+    # --- [GUI MOD] ---
+    # _update_allocation_display (Port/Stbd 텍스트 박스 업데이트)
     def _update_allocation_display(self):
         try:
             rs_total = int(self.rs_count.get() or 0)
+            rpr = int(self.rd_per_rs.get() or 0)
         except(ValueError, TypeError):
             rs_total = 0
+            rpr = 0
 
         even_rs = [i for i in range(1, rs_total+1) if i % 2 == 0]
         odd_rs  = [i for i in range(1, rs_total+1) if i % 2 == 1]
 
-        rd_counts = self._collect_rd_counts()
+        rd_counts = _collect_rd_counts(self.items)
+   
         grand_total = sum(rd_counts.values())
         self.grand_total_label.config(text=f"Grand Total: {grand_total}")
 
+        # Port/Stbd 텍스트 박스 업데이트 로직
         for txt_widget, indices in [(self.txt_even, even_rs), (self.txt_odd, odd_rs)]:
-            content = self._build_rs_summary(indices, rd_counts)
+            content = _build_rs_summary(indices, rd_counts, rpr)
             txt_widget.config(state="normal")
             txt_widget.delete("1.0", tk.END)
             txt_widget.insert(tk.END, content)
             txt_widget.config(state="disabled")
+    # --- [END GUI MOD] ---
 
     def pick_color(self):
         _, hx = colorchooser.askcolor(color=self.current_color.get(), title="Pick Color")
@@ -758,7 +1009,7 @@ class GridCanvas(ttk.Frame):
                 values = [int(p.strip()) for p in str(row[1]).replace("，", ",").split(",") if p.strip()]
                 if not values: raise ValueError
                 rows, cols = len(values), max(values)
-                
+           
                 # --- 블록 생성 시 Hatch/Hold 자동 할당 ---
                 b = Block(rows=rows, cols=cols)
                 if rows >= 6:
@@ -782,7 +1033,14 @@ class GridCanvas(ttk.Frame):
         path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")])
         if path:
             try:
-                write_excel(self.items, path, self.ship_no.get(), self.looking_txt.get())
+                write_excel(
+                    self.items, 
+                    path, 
+                    self.ship_no.get(), 
+                    self.looking_txt.get(),
+                    self.rs_count.get(),
+                    self.rd_per_rs.get()
+                )
                 messagebox.showinfo("Exported", f"파일 저장 완료:\n{path}")
             except Exception as e:
                 messagebox.showerror("Error", f"저장 실패:\n{e}")
@@ -801,7 +1059,13 @@ class GridCanvas(ttk.Frame):
         cap = simpledialog.askinteger("Auto Set", "RD panel 당 최대 컨테이너 수", minvalue=4, maxvalue=9999, parent=self)
         if cap is None: return
 
-        even_list, odd_list = self._build_rd_queues()
+        try:
+            rs_total = int(self.rs_count.get() or 0)
+            rpr = int(self.rd_per_rs.get() or 0)
+        except(ValueError, TypeError):
+            rs_total, rpr = 0, 0
+        even_list, odd_list = _build_rd_queues(rs_total, rpr)
+
         rd_remaining = {rd: cap for rd in even_list + odd_list}
         cur_even, cur_odd = [0], [0]
 
@@ -834,7 +1098,7 @@ class GridCanvas(ttk.Frame):
                         success = True
 
             if not success:
-                messagebox.showerror("배치 실패", "빈 칸 없이 모든 공간을 채우는 조합을 찾지 못했습니다. 블록 모양을 확인해주세요.")
+                messagebox.showerror("배치 실패", "빈 칸 없이 모든 공간을 채우는 조합을 찾지 못했습니다.\n블록 모양을 확인해주세요.")
                 continue
 
             for p in placements:
@@ -958,7 +1222,7 @@ class GridCanvas(ttk.Frame):
             if rd_rem.get(rd, 0) >= need:
                 rd_rem[rd] -= need
                 if rd_rem.get(rd, 0) == 0:
-                     cursor[0] = j + 1
+                    cursor[0] = j + 1
                 return rd
         for j in range(i + win, n):
             rd = rds[j]
