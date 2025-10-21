@@ -223,7 +223,7 @@ def write_excel(
     ws.column_dimensions[_g(qty_col)].width     = 4
     ws.column_dimensions[_g(gang_gap_col)].width= 2
     for g in range(3, 10): ws.column_dimensions[_g(g_cols[g])].width = 4
-    ws.column_dimensions[_g(g_sum_col)].width  = 7
+    ws.column_dimensions[_g(g_sum_col)].width   = 7
 
     title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
     try:
@@ -409,6 +409,12 @@ def _write_summary_sheet_v5(
 ):
     """
     (V5) RS/RD 병합, 폰트 축소, Grand Total 제거 + 추가 표 (행 제목 포함) 추가
+    [USER MODIFIED] 
+    - 표 1 (Cargo Hold Fans): 원본 레이아웃 유지 (가로: Data Headers, 세로: Row Titles)
+    - 표 2 (Reefer Section): 행/열 전환 (가로: Row Titles, 세로: Data Headers(RS List))
+    - [USER MODIFIED 2]
+    - 오른쪽 표 2개의 '행 제목'을 '첫 번째 열의 데이터'로 이동 (셀 1칸씩 이동)
+    - 오른쪽 표 2개의 열 너비를 더 '핏하게' 수정
     """
 
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -460,8 +466,7 @@ def _write_summary_sheet_v5(
     # [MODIFIED] process_rs_list (RS/RD 병합, Grand Total 반환값 제거)
     def process_rs_list(rs_list: list, s_row: int, c_offset: int) -> int:
         """
-        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다.
-        (다음 시작 행) 반환
+        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다. (다음 시작 행) 반환
         """
         cur_row = s_row
 
@@ -578,15 +583,15 @@ def _write_summary_sheet_v5(
     # --- [MODIFIED] 추가 표 (행 제목 포함) 작성 ---
     new_table_start_col = stbd_col_offset + len(headers) + 2
 
-    # --- 표 1: Cargo Hold Fans ---
-    # 표 1의 행 제목 (18개 항목)
+    # --- 표 1: Cargo Hold Fans (원본 레이아웃 유지) ---
+    # 표 1의 행 제목 (세로 데이터)
     table1_row_titles = [
         "SIDE PASSGAEWAY(FWD)", "No.1A (Exp)", "No.2F (Exp)", "No.3F", "No.4F",
         "SIDE PASSAGEWAY(AFT)", "No.5F1", "No.5F2", "No.5A1", "No.5A2",
         "No.6F1", "No.6F2", "No.6A1", "No.6A2", "No.7F", "No.8F",
         "PIPE DUCT", "No.9F"
     ]
-    # 표 1의 데이터 영역에 사용될 열 제목 (12개 항목)
+    # 표 1의 데이터 영역에 사용될 열 제목 (가로 헤더)
     table1_data_headers = [
         "Cargo hold (STBD)", "No. of C/Hold fans (STBD)", "Cargo hold(PORT)",
         "No. of C/Hold fans (PORT)", "Total No. of C/Hold fans",
@@ -595,76 +600,87 @@ def _write_summary_sheet_v5(
         "Actual power consumption(PORT, kW)"
     ]
     
-    # 행 제목 열 너비
-    table1_row_title_width = 30
-    table1_data_widths = [15] * len(table1_data_headers) # 데이터 열 너비 (예시)
+    # [FIX] 열 너비 '핏하게' 수정
+    # 첫 번째 열 (헤더: "Cargo hold (STBD)", 데이터: "SIDE PASSGAEWAY(FWD)")
+    table1_row_title_width = 28 
+    # 나머지 데이터 열 (헤더 11개)
+    table1_data_widths = [14] * (len(table1_data_headers) - 1)
     
     # 표1 시작 행 (RS/RD 헤더와 동일)
     table1_header_row = rs_rd_header_row 
     
-    # 1. 행 제목 열 너비 설정
+    # 1. 첫 번째 열 너비 설정
     ws.column_dimensions[get_column_letter(new_table_start_col)].width = table1_row_title_width
-    # 2. 데이터 열 너비 설정
+    # 2. 나머지 데이터 열 너비 설정
     set_column_widths(new_table_start_col + 1, table1_data_widths)
 
     # 3. 데이터 열 헤더(가로 제목) 쓰기
     for i, header in enumerate(table1_data_headers):
-        col_idx = new_table_start_col + 1 + i
+        col_idx = new_table_start_col + i  # [FIX] +1 제거
         cell = ws.cell(row=table1_header_row, column=col_idx, value=header)
         apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
 
-    # 4. 행 제목(세로) 쓰기
+    # 4. 첫 번째 열 데이터 (구 '행 제목') 및 빈 데이터 셀 쓰기
     current_row = table1_header_row + 1 # 헤더 다음 줄부터 시작
     for title in table1_row_titles:
-        # 첫 번째 열(new_table_start_col)에 행 제목 쓰기
+        # 첫 번째 열(new_table_start_col)에 데이터 쓰기
         cell = ws.cell(row=current_row, column=new_table_start_col, value=title)
-        apply_styles(cell, align=align_left_wrap, border=table_border) 
-        # 해당 행의 데이터 열들에 테두리만 적용
-        for i in range(len(table1_data_headers)):
+        apply_styles(cell, align=align_left_wrap, border=table_border) # 세로 항목은 Bold 없음
+        
+        # [FIX] 해당 행의 '데이터' 열들에 테두리만 적용 (첫 열 제외)
+        for i in range(len(table1_data_headers) - 1): # [FIX] -1 추가
              apply_styles(ws.cell(row=current_row, column=new_table_start_col + 1 + i), border=table_border)
         current_row += 1
 
-    # --- 표 2: Reefer Section Board (행 제목) ---
-    table2_row_titles = [
+    # --- 표 2: Reefer Section Board (행/열 전환) ---
+    
+    # (신) 가로 헤더 (기존 table2_row_titles)
+    table2_horizontal_headers = [
         "Reefer Section board", "Ref. container(FEU)", "Reefer container(kVA)",
         "Cargo fan(kVA)", "Total capacity(kVA)", "TR capacity(kVA)"
     ]
     
-    # 표 2의 데이터 영역에 사용될 열 제목 (동적 RS 리스트)
-    table2_data_headers = []
+    # (신) 세로 헤더 (데이터) (기존 table2_data_headers - 동적 RS 리스트)
+    table2_vertical_headers = []
     if rs_total > 0:
         for i in range(1, rs_total + 1):
             suffix = "(S)" if i % 2 == 1 else "(P)"
-            table2_data_headers.append(f"RS-{i}\n{suffix}")
+            table2_vertical_headers.append(f"RS-{i}\n{suffix}")
             
-    table2_row_title_width = 30
-    table2_data_widths = [10] * len(table2_data_headers) if len(table2_data_headers) > 0 else [10] # 데이터 열 너비 (예시)
+    # [FIX] 열 너비 '핏하게' 수정
+    # 첫 번째 열 (헤더: "Reefer Section board", 데이터: "RS-X")
+    table2_vertical_header_width = 22
+    # 나머지 데이터 열 (헤더 5개)
+    table2_data_widths = [18] * (len(table2_horizontal_headers) - 1)
 
     # 표 1 데이터 영역 바로 아래 + 2줄 간격 시작
     table2_header_row = current_row + 2 
 
-    # 1. 행 제목 열 너비 설정 (표 1과 동일)
-    ws.column_dimensions[get_column_letter(new_table_start_col)].width = table2_row_title_width
-    # 2. 데이터 열 너비 설정
+    # 1. 첫 번째 열 너비 설정
+    ws.column_dimensions[get_column_letter(new_table_start_col)].width = table2_vertical_header_width
+    # 2. 나머지 데이터 열 너비 설정 (표1과 너비가 다를 수 있으므로 재설정)
     set_column_widths(new_table_start_col + 1, table2_data_widths) 
 
-    # 3. 데이터 열 헤더(가로 제목 - RS 목록) 쓰기
-    for i, header in enumerate(table2_data_headers):
-        col_idx = new_table_start_col + 1 + i
+    # 3. (신) 가로 헤더 (기존 Row Titles) 쓰기
+    for i, header in enumerate(table2_horizontal_headers):
+        col_idx = new_table_start_col + i # [FIX] +1 제거
         cell = ws.cell(row=table2_header_row, column=col_idx, value=header)
         apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
         
-    # 4. 행 제목(세로) 쓰기
+    # 4. (신) 세로 헤더 (데이터) (기존 Data Headers - RS 목록) 쓰기
     current_row = table2_header_row + 1 # 헤더 다음 줄부터 시작
-    for title in table2_row_titles:
-        # 첫 번째 열(new_table_start_col)에 행 제목 쓰기
+    for title in table2_vertical_headers:
+        # 첫 번째 열(new_table_start_col)에 (신) 세로 헤더 쓰기
         cell = ws.cell(row=current_row, column=new_table_start_col, value=title)
-        apply_styles(cell, align=align_left_wrap, border=table_border)
-        # 해당 행의 데이터 열들에 테두리만 적용
-        for i in range(len(table2_data_headers)):
+        # RS 목록은 세로/가운데 정렬 (개행 문자 \n 처리) 및 Bold
+        apply_styles(cell, align=align_center_wrap, border=table_border, font=bold_font)
+        
+        # [FIX] 해당 행의 '데이터' 열들에 테두리만 적용 (첫 열 제외)
+        for i in range(len(table2_horizontal_headers) - 1): # [FIX] -1 추가
              apply_styles(ws.cell(row=current_row, column=new_table_start_col + 1 + i), border=table_border)
         current_row += 1
     # --- [END MODIFIED] ---
+
 
 # --------------------------------
 # GUI
@@ -855,7 +871,8 @@ class GridCanvas(ttk.Frame):
         rd_counts = _collect_rd_counts(self.items)
    
         grand_total = sum(rd_counts.values())
-        self.grand_total_label.config(text=f"Grand Total: 0")
+        # [BUG FIX] Grand Total이 실제 값을 반영하도록 수정
+        self.grand_total_label.config(text=f"Grand Total: {grand_total}")
 
         # Port/Stbd 텍스트 박스 업데이트 로직
         for txt_widget, indices in [(self.txt_even, even_rs), (self.txt_odd, odd_rs)]:
@@ -933,7 +950,7 @@ class GridCanvas(ttk.Frame):
 
     def on_drag_right(self, e):
         self.update_drag_rect(e, left_click=False)
- 
+
     def on_release_right(self, e):
         if self.drag_rect_id_right:
             self.canvas.delete(self.drag_rect_id_right)
@@ -1076,7 +1093,7 @@ class GridCanvas(ttk.Frame):
                 values = [int(p.strip()) for p in str(row[1]).replace("，", ",").split(",") if p.strip()]
                 if not values: raise ValueError
                 rows, cols = len(values), max(values)
-                
+          
                 # --- 블록 생성 시 Hatch/Hold 자동 할당 ---
                 b = Block(rows=rows, cols=cols)
                 if rows >= 6:
@@ -1387,10 +1404,10 @@ class GridCanvas(ttk.Frame):
             if can_fit and below_target:
                 rd_remaining[current_rd] -= need
                 target_counts[current_rd] = target_counts.get(current_rd, 0) - need 
-                cursor[0] = current_idx 
+                cursor[0] = current_idx # 커서를 현재 위치로 갱신 (다음 RD로 넘어가지 않음)
                 return current_rd
                 
-            current_idx += 1 
+            current_idx += 1 # 다음 RD로 이동
             
         # --- 2. 후-채우기: 목표량 무시하고 물리적으로 가능한 첫 RD에 할당 (처음부터 다시 순회) ---
         for i in range(n): 
@@ -1399,7 +1416,7 @@ class GridCanvas(ttk.Frame):
             if rd_remaining.get(check_rd, 0) >= need:
                 rd_remaining[check_rd] -= need
                 target_counts[check_rd] = target_counts.get(check_rd, 0) - need 
-                cursor[0] = check_idx 
+                cursor[0] = check_idx # 커서를 할당한 위치로 이동
                 return check_rd
                 
         # --- 3. 후-채우기까지 실패 (정말로 공간 없음) ---
