@@ -415,6 +415,23 @@ def _write_summary_sheet_v5(
     - [USER MODIFIED 2]
     - 오른쪽 표 2개의 '행 제목'을 '첫 번째 열의 데이터'로 이동 (셀 1칸씩 이동)
     - 오른쪽 표 2개의 열 너비를 더 '핏하게' 수정
+    --- [USER MODIFIED 3] ---
+    - REQ 1: CABLE 열 추가
+    - REQ 2: "RS-x Total" -> "Total"
+    - REQ 3: 각 RS 섹션마다 헤더 반복
+    - REQ 4: 각 RS 섹션 Total 행 뒤에 1줄 여백
+    --- [USER MODIFIED 4] ---
+    - REQ 1: Fan 표 Efficiency(0.88), Load factor(0.8), Div. factor(1) 값 채우기
+    - REQ 2: Reefer 표 RS-x \n (S) -> RS-x (S) (한 줄로) 및 왼쪽 정렬
+    --- [USER MODIFIED 5] ---
+    - REQ 1: Reefer 표 "TR capacity(SPEC)" 열 추가
+    - REQ 2: Reefer 표 "SOx Scrubber" 열 추가
+    - REQ 3: Reefer 표 하단에 2x2 추가 표 (TR / efficiency)
+    - REQ 4: Reefer 표 행 배경색 6색 순환 적용
+    --- [USER MODIFIED 6] ---
+    - REQ 1: 2x2 표 서식 변경 (2x2만 테두리, 메모 폰트 축소, 메모 위치 이동, 병합 제거)
+    - REQ 2: PORT/STBD 표 시작 행 3으로 변경, Cargo Hold 표 시작 행 2로 변경, Reefer 표는 Cargo Hold 표 아래로 이동
+    - REQ 3: Reefer 표 수식 적용 (Total값 참조, 2x2표 값 절대 참조, IFERROR) 재검증
     """
 
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -436,10 +453,17 @@ def _write_summary_sheet_v5(
 
     thin_side = Side(style="thin", color="000000")
     table_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    
+    # --- [수정] REQ 1 (2x2 Table): 작은 폰트 정의 ---
+    small_font = Font(size=9)
+    # --- [끝] ---
 
     # --- 2. 헤더 및 열 너비 설정 ---
-    headers = ["RS", "RD", "REF. CON", "A", "BREAKER", "KVA"]
-    col_widths = [8, 8, 8, 8, 12, 10]
+    
+    # --- [수정] REQ 1: "CABLE" 열 추가 ---
+    headers = ["RS", "RD", "REF. CON", "A", "BREAKER", "CABLE", "KVA"]
+    col_widths = [8, 8, 8, 8, 12, 10, 10] # "CABLE" 너비 10 추가
+    # --- [끝] ---
 
     # --- 3. 테이블 작성 헬퍼 함수 ---
     def apply_styles(cell: Cell, font=None, fill=None, align=None, border=None, num_format=None):
@@ -464,31 +488,56 @@ def _write_summary_sheet_v5(
 
 
     # [MODIFIED] process_rs_list (RS/RD 병합, Grand Total 반환값 제거)
-    def process_rs_list(rs_list: list, s_row: int, c_offset: int) -> int:
+    
+    # --- [수정] REQ 3: 헤더 스타일 인자 추가 + 반환 타입 변경 (Tuple) ---
+    def process_rs_list(rs_list: list, s_row: int, c_offset: int,
+                        headers: list, bold_font, header_fill, align_center_wrap, table_border
+                       ) -> Tuple[int, Dict[int, str]]:
+    # --- [끝] ---
         """
-        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다. (다음 시작 행) 반환
+        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다. 
+        (다음 시작 행, {RS번호: REF.CON Total 셀 주소}) 딕셔너리 반환
         """
         cur_row = s_row
+        rs_totals = {} # {RS번호: REF.CON Total 셀 주소}
 
+        # --- [수정] REQ 3: 데이터 없는 경우에도 헤더 표시 ---
         if rpr <= 0 or not rs_list:
+            # 헤더 그리기
+            for i, h in enumerate(headers):
+                h_cell = ws.cell(row=cur_row, column=c_offset + i, value=h)
+                apply_styles(h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
+            cur_row += 1
+            # 빈 데이터 행
             for i, h in enumerate(headers):
                 apply_styles(ws.cell(cur_row, c_offset+i), border=table_border)
             ws.cell(cur_row, c_offset, "-")
             cur_row += 1
-            return cur_row
+            return cur_row, rs_totals # 빈 딕셔너리 반환
+        # --- [끝] ---
 
         for rs in rs_list:
+        
+            # --- [수정] REQ 3: 각 RS 블록 위에 헤더 행 추가 ---
+            for i, h in enumerate(headers):
+                h_cell = ws.cell(row=cur_row, column=c_offset + i, value=h)
+                apply_styles(h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
+            cur_row += 1
+            # --- [끝] ---
+            
             rd_list = _rd_list_for_rs(rs, rpr)
             rs_start_row = cur_row
 
             if not rd_list:
-                ws.merge_cells(start_row=cur_row, start_column=c_offset + 1, end_row=cur_row, end_column=c_offset + 5)
+                # --- [수정] REQ 1: CABLE 열 반영 (열 병합 5->6, 루프 6->7) ---
+                ws.merge_cells(start_row=cur_row, start_column=c_offset + 1, end_row=cur_row, end_column=c_offset + 6)
                 rs_cell = ws.cell(cur_row, c_offset, f"RS-{rs}")
                 apply_styles(rs_cell, font=bold_font, align=align_left_wrap, border=table_border)
                 rd_cell = ws.cell(cur_row, c_offset + 1, "  (No RDs)")
                 apply_styles(rd_cell, align=align_left_wrap, border=table_border)
-                for i in range(2, 6):
+                for i in range(2, 7): # 6 -> 7
                     apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
+                # --- [끝] ---
                 cur_row += 1
                 rs_start_row_for_sum = -1
             else:
@@ -504,8 +553,14 @@ def _write_summary_sheet_v5(
                     apply_styles(a_cell, align=align_right, border=table_border, num_format='0.00')
                     breaker_cell = ws.cell(cur_row, c_offset + 4, value=f'=IF({a_cell_addr}>=800,"1250/900",IF({a_cell_addr}>=700,"800/800","800/700"))')
                     apply_styles(breaker_cell, align=align_center_wrap, border=table_border)
-                    kva_cell = ws.cell(cur_row, c_offset + 5, value=f"={ref_con_cell_addr}*10.6")
+                    
+                    # --- [수정] REQ 1: CABLE 셀 추가 및 KVA 셀 이동 ---
+                    cable_cell = ws.cell(cur_row, c_offset + 5) # CABLE 셀
+                    apply_styles(cable_cell, border=table_border)
+                    
+                    kva_cell = ws.cell(cur_row, c_offset + 6, value=f"={ref_con_cell_addr}*10.6") # KVA 셀 (5->6)
                     apply_styles(kva_cell, align=align_right, border=table_border, num_format='0.00')
+                    # --- [끝] ---
                     cur_row += 1
 
                 rs_end_row = cur_row - 1
@@ -522,28 +577,47 @@ def _write_summary_sheet_v5(
                     apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
                 cur_row += 1
 
-            total_label_cell = ws.cell(row=cur_row, column=c_offset, value=f"RS-{rs} Total")
+            # --- [수정] REQ 2: "RS-x Total" -> "Total" ---
+            total_label_cell = ws.cell(row=cur_row, column=c_offset, value="Total")
+            # --- [끝] ---
             apply_styles(total_label_cell, font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
             apply_styles(ws.cell(cur_row, c_offset+1), fill=total_fill, border=table_border)
 
             if rs_start_row_for_sum == -1:
                 ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
+                ref_total_coord = "0" # 주소 대신 0 사용
             else:
                 rs_end_row_for_sum = cur_row - spare_rows - 1
                 ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
                 a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
-                kva_sum_formula = f"=SUM({get_column_letter(c_offset+5)}{rs_start_row_for_sum}:{get_column_letter(c_offset+5)}{rs_end_row_for_sum})"
+                
+                # --- [수정] REQ 1: KVA 합계 열 5 -> 6 ---
+                kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
+                # --- [끝] ---
+                ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}" # Total 셀의 주소
 
             ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
             apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
+            
+            # --- [수정] REQ 3 (Reefer Table): 수식 적용을 위해 Total 셀 주소 저장 ---
+            rs_totals[rs] = ref_total_coord # 0 또는 실제 주소 저장
+            # --- [끝] ---
+
             a_total_cell = ws.cell(cur_row, c_offset + 3, value=a_sum_formula)
             apply_styles(a_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
-            apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border)
-            kva_total_cell = ws.cell(cur_row, c_offset + 5, value=kva_sum_formula)
+        
+            # --- [수정] REQ 1 & 4: CABLE Total 셀 추가, KVA 셀 이동, 여백 추가 ---
+            apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border) # BREAKER Total (blank)
+            apply_styles(ws.cell(cur_row, c_offset+5), fill=total_fill, border=table_border) # CABLE Total (blank)
+            
+            kva_total_cell = ws.cell(cur_row, c_offset + 6, value=kva_sum_formula) # KVA Total (5->6)
             apply_styles(kva_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
             cur_row += 1
 
-        return cur_row
+            cur_row += 1 # [REQ 4] 각 RS 블록 뒤에 한 줄 여백 추가
+            # --- [끝] ---
+
+        return cur_row, rs_totals # --- [수정] REQ 3: 반환값 변경 ---
 
     # --- 4. 메인 실행 ---
 
@@ -559,27 +633,33 @@ def _write_summary_sheet_v5(
     set_column_widths(stbd_col_offset, col_widths)
     ws.column_dimensions[get_column_letter(port_col_offset + len(col_widths))].width = 3 # Gap
 
-    ws.merge_cells(start_row=1, start_column=port_col_offset, end_row=1, end_column=port_col_offset + len(headers) - 1)
-    port_title_cell = ws.cell(row=1, column=port_col_offset, value=port_title)
+    # --- [수정] REQ 2 (Global Offset): PORT/STBD 제목 행 2로 변경 ---
+    ws.merge_cells(start_row=2, start_column=port_col_offset, end_row=2, end_column=port_col_offset + len(headers) - 1)
+    port_title_cell = ws.cell(row=2, column=port_col_offset, value=port_title)
     apply_styles(port_title_cell, font=title_font, align=align_center_wrap)
 
-    ws.merge_cells(start_row=1, start_column=stbd_col_offset, end_row=1, end_column=stbd_col_offset + len(headers) - 1)
-    stbd_title_cell = ws.cell(row=1, column=stbd_col_offset, value=stbd_title)
+    ws.merge_cells(start_row=2, start_column=stbd_col_offset, end_row=2, end_column=stbd_col_offset + len(headers) - 1)
+    stbd_title_cell = ws.cell(row=2, column=stbd_col_offset, value=stbd_title)
     apply_styles(stbd_title_cell, font=title_font, align=align_center_wrap)
+    # --- [끝] ---
 
-    rs_rd_header_row = 2
-    for i, h in enumerate(headers):
-        port_h_cell = ws.cell(row=rs_rd_header_row, column=port_col_offset + i, value=h)
-        apply_styles(port_h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
+    # --- [수정] REQ 2 & 3: 헤더 그리기 로직 제거 및 process_rs_list 호출 수정, 시작행 변경 (3) ---
+    data_start_row = 3 # 시작 행 3으로 변경
 
-        stbd_h_cell = ws.cell(row=rs_rd_header_row, column=stbd_col_offset + i, value=h)
-        apply_styles(stbd_h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
+    port_next_row, port_totals = process_rs_list(
+        even_rs, data_start_row, port_col_offset,
+        headers, bold_font, header_fill, align_center_wrap, table_border
+    )
+    stbd_next_row, stbd_totals = process_rs_list(
+        odd_rs, data_start_row, stbd_col_offset,
+        headers, bold_font, header_fill, align_center_wrap, table_border
+    )
+    
+    all_rs_totals = {**port_totals, **stbd_totals} # 수식용 Total 주소 통합
+    rs_tables_end_row = max(port_next_row, stbd_next_row) - 1 # 실제 데이터 마지막 행
+    # --- [끝] ---
 
-    data_start_row = rs_rd_header_row + 1
-
-    port_next_row = process_rs_list(even_rs, data_start_row, port_col_offset)
-    stbd_next_row = process_rs_list(odd_rs, data_start_row, stbd_col_offset)
-
+ 
     # --- [MODIFIED] 추가 표 (행 제목 포함) 작성 ---
     new_table_start_col = stbd_col_offset + len(headers) + 2
 
@@ -606,8 +686,9 @@ def _write_summary_sheet_v5(
     # 나머지 데이터 열 (헤더 11개)
     table1_data_widths = [14] * (len(table1_data_headers) - 1)
     
-    # 표1 시작 행 (RS/RD 헤더와 동일)
-    table1_header_row = rs_rd_header_row 
+    # --- [수정] REQ 2 (Global Offset): Cargo Hold 표 시작 행 2로 수정 ---
+    table1_header_row = 2
+    # --- [끝] ---
     
     # 1. 첫 번째 열 너비 설정
     ws.column_dimensions[get_column_letter(new_table_start_col)].width = table1_row_title_width
@@ -621,40 +702,74 @@ def _write_summary_sheet_v5(
         apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
 
     # 4. 첫 번째 열 데이터 (구 '행 제목') 및 빈 데이터 셀 쓰기
-    current_row = table1_header_row + 1 # 헤더 다음 줄부터 시작
+    current_row_for_fan_table = table1_header_row + 1 # Fan 표 전용 행 카운터
     for title in table1_row_titles:
         # 첫 번째 열(new_table_start_col)에 데이터 쓰기
-        cell = ws.cell(row=current_row, column=new_table_start_col, value=title)
+        cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col, value=title)
         apply_styles(cell, align=align_left_wrap, border=table_border) # 세로 항목은 Bold 없음
         
-        # [FIX] 해당 행의 '데이터' 열들에 테두리만 적용 (첫 열 제외)
-        for i in range(len(table1_data_headers) - 1): # [FIX] -1 추가
-             apply_styles(ws.cell(row=current_row, column=new_table_start_col + 1 + i), border=table_border)
-        current_row += 1
+        # --- [수정] REQ 1 (Fan Table): Efficiency, Load factor, Div. factor 값 채우기 ---
+        for i in range(len(table1_data_headers) - 1): # 0 to 10
+            col_idx = new_table_start_col + 1 + i
+            header_index = i + 1 # Corresponds to index in table1_data_headers
+            cell = ws.cell(row=current_row_for_fan_table, column=col_idx)
+            
+            value_to_add = None
+            num_format = None
+            align = align_right # 기본값 오른쪽 정렬
+            
+            if header_index == 6: # Efficiency
+                value_to_add = 0.88
+                num_format = '0.00'
+            elif header_index == 7: # Load factor
+                value_to_add = 0.8
+                num_format = '0.0'
+            elif header_index == 8: # Div. factor
+                value_to_add = 1
+                num_format = '0'
+            
+            if value_to_add is not None:
+                cell.value = value_to_add
+                apply_styles(cell, border=table_border, align=align, num_format=num_format)
+            else:
+                # 값이 없는 다른 셀들은 테두리만 적용
+                apply_styles(cell, border=table_border)
+        # --- [끝] ---
+        current_row_for_fan_table += 1
+    fan_table_end_row = current_row_for_fan_table -1 # Fan 테이블 실제 마지막 행
 
+
+    # --- [수정] REQ 2 (Global Offset): Reefer 표 위치 조정 (Fan 표 아래) ---
     # --- 표 2: Reefer Section Board (행/열 전환) ---
     
-    # (신) 가로 헤더 (기존 table2_row_titles)
+    # --- [수정] REQ 1 & 2 (Reefer Table): "SOx Scrubber" 및 "TR capacity(SPEC)" 열 추가 ---
     table2_horizontal_headers = [
         "Reefer Section board", "Ref. container(FEU)", "Reefer container(kVA)",
-        "Cargo fan(kVA)", "Total capacity(kVA)", "TR capacity(kVA)"
+        "Cargo fan(kVA)", "SOx Scrubber", "Total capacity(kVA)", "TR capacity(kVA)",
+        "TR capacity(SPEC)"
     ]
+    # --- [끝] ---
     
     # (신) 세로 헤더 (데이터) (기존 table2_data_headers - 동적 RS 리스트)
     table2_vertical_headers = []
     if rs_total > 0:
         for i in range(1, rs_total + 1):
             suffix = "(S)" if i % 2 == 1 else "(P)"
-            table2_vertical_headers.append(f"RS-{i}\n{suffix}")
+            # --- [수정] REQ 2 (Reefer Table): 줄바꿈(\n) 대신 공백 삽입 ---
+            table2_vertical_headers.append(f"RS-{i} {suffix}")
+            # --- [끝] ---
             
     # [FIX] 열 너비 '핏하게' 수정
     # 첫 번째 열 (헤더: "Reefer Section board", 데이터: "RS-X")
     table2_vertical_header_width = 22
-    # 나머지 데이터 열 (헤더 5개)
+    
+    # --- [수정] REQ 1 & 2 (Reefer Table): 데이터 너비 리스트 갱신 (7개) ---
     table2_data_widths = [18] * (len(table2_horizontal_headers) - 1)
+    # --- [끝] ---
 
-    # 표 1 데이터 영역 바로 아래 + 2줄 간격 시작
-    table2_header_row = current_row + 2 
+    # Fan 테이블 바로 아래 + 2줄 간격 시작
+    table2_header_row = fan_table_end_row + 3 
+    # --- [끝] 위치 조정 ---
 
     # 1. 첫 번째 열 너비 설정
     ws.column_dimensions[get_column_letter(new_table_start_col)].width = table2_vertical_header_width
@@ -668,18 +783,106 @@ def _write_summary_sheet_v5(
         apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
         
     # 4. (신) 세로 헤더 (데이터) (기존 Data Headers - RS 목록) 쓰기
-    current_row = table2_header_row + 1 # 헤더 다음 줄부터 시작
-    for title in table2_vertical_headers:
-        # 첫 번째 열(new_table_start_col)에 (신) 세로 헤더 쓰기
-        cell = ws.cell(row=current_row, column=new_table_start_col, value=title)
-        # RS 목록은 세로/가운데 정렬 (개행 문자 \n 처리) 및 Bold
-        apply_styles(cell, align=align_center_wrap, border=table_border, font=bold_font)
+    current_row_for_reefer_table = table2_header_row + 1 # Reefer 표 전용 행 카운터
+    
+    # --- [수정] REQ 4 (Reefer Table): 행 배경색 추가 ---
+    table2_colors = ["EBF1DE", "D8E4BC", "E4DFEC", "CCC0DA", "DAEEF3", "B7DEE8"]
+    num_colors = len(table2_colors)
+    
+    for idx, title in enumerate(table2_vertical_headers):
+        rs_index = idx + 1 # RS-1, RS-2...
         
-        # [FIX] 해당 행의 '데이터' 열들에 테두리만 적용 (첫 열 제외)
-        for i in range(len(table2_horizontal_headers) - 1): # [FIX] -1 추가
-             apply_styles(ws.cell(row=current_row, column=new_table_start_col + 1 + i), border=table_border)
-        current_row += 1
+        color_hex = table2_colors[idx % num_colors]
+        row_fill = PatternFill("solid", fgColor=color_hex)
+        # --- [끝] ---
+
+        # 첫 번째 열(new_table_start_col)에 (신) 세로 헤더 쓰기
+        cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col, value=title)
+        
+        # --- [수정] REQ 2 (Reefer Table): 정렬 방식 변경 (center_wrap -> left_wrap) + REQ 4 (Fill) ---
+        apply_styles(cell, align=align_left_wrap, border=table_border, font=bold_font, fill=row_fill)
+        # --- [끝] ---
+        
+        # --- [수정] REQ 3 (Reefer Table): 수식 적용 ---
+        
+        # (col + 1) Ref. container(FEU)
+        ref_con_total_addr = all_rs_totals.get(rs_index, "0") # 존재하지 않으면 "0"
+        ref_feu_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 1, value=f"={ref_con_total_addr}")
+        apply_styles(ref_feu_cell, border=table_border, fill=row_fill, align=align_right, num_format='0')
+
+        # (col + 2) Reefer container(kVA) - 아래 2x2 표 참조 필요 (절대 주소$)
+        # 아직 2x2 표 주소를 모르므로 임시값 넣고 나중에 설정
+        ref_kva_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 2)
+        apply_styles(ref_kva_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
+
+        # (col + 3) Cargo fan(kVA) - 수식 없음, 빈칸
+        cargo_fan_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 3)
+        apply_styles(cargo_fan_cell, border=table_border, fill=row_fill)
+
+        # (col + 4) SOx Scrubber - 수식 없음, 빈칸
+        sox_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 4)
+        apply_styles(sox_cell, border=table_border, fill=row_fill)
+        
+        # (col + 5) Total capacity(kVA)
+        total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 5, value=f"=SUM({ref_kva_cell.coordinate},{cargo_fan_cell.coordinate},{sox_cell.coordinate})")
+        apply_styles(total_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
+
+        # (col + 6) TR capacity(kVA) - 아래 2x2 표 참조 필요 (절대 주소$), IFERROR 추가
+        # 아직 2x2 표 주소를 모르므로 임시값 넣고 나중에 설정
+        tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 6)
+        apply_styles(tr_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
+        
+        # (col + 7) TR capacity(SPEC) - 수식 없음, 빈칸
+        tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 7)
+        apply_styles(tr_spec_cell, border=table_border, fill=row_fill)
+        # --- [끝] ---
+
+        current_row_for_reefer_table += 1
+    reefer_table_end_row = current_row_for_reefer_table - 1 # Reefer 테이블 실제 마지막 행
     # --- [END MODIFIED] ---
+
+
+    # --- [수정] REQ 2 (Global Offset): 2x2 표 위치 조정 (Reefer 표 아래) ---
+    # --- 2x2 추가 표 (TR / efficiency) ---
+    tr_table_start_row = reefer_table_end_row + 2 # Reefer 표 아래 1줄 여백
+
+    # Row 1
+    cell_r1_c1 = ws.cell(row=tr_table_start_row, column=new_table_start_col, value="Reefer cntr for TR")
+    apply_styles(cell_r1_c1, align=align_left_wrap, border=table_border, font=bold_font) # 테두리 적용
+    cell_r1_c2 = ws.cell(row=tr_table_start_row, column=new_table_start_col + 1, value=10.6)
+    apply_styles(cell_r1_c2, align=align_right, border=table_border, num_format='0.0" kVA"') # 테두리 적용
+    tr_k_per_cntr_addr = cell_r1_c2.coordinate
+    
+    # Row 2
+    tr_table_current_row = tr_table_start_row + 1
+    cell_r2_c1 = ws.cell(row=tr_table_current_row, column=new_table_start_col, value="TR efficiency")
+    apply_styles(cell_r2_c1, align=align_left_wrap, border=table_border, font=bold_font) # 테두리 적용
+    
+    cell_r2_c2 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 1, value=0.95)
+    apply_styles(cell_r2_c2, align=align_right, border=table_border, num_format='0.00') # 테두리 적용
+    tr_eff_addr = cell_r2_c2.coordinate
+
+    # --- [수정] REQ 1 (2x2 Table): 메모 서식 변경 (테두리 X, 폰트 축소, C열로 이동) ---
+    cell_r2_c3 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 2, value="실제 TR도면 접수 후 다시 기입")
+    apply_styles(cell_r2_c3, align=align_left_wrap, border=None, font=small_font) # 테두리 없음
+    # --- [끝] ---
+    # --- [끝 2x2 표] ---
+    # --- [끝] 위치 조정 ---
+
+
+    # --- [수정] REQ 3 (Reefer Table): Reefer 표 수식 재설정 (2x2 표 주소 확정 후) ---
+    for r_idx in range(table2_header_row + 1, reefer_table_end_row + 1):
+        ref_feu_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 1).coordinate
+        
+        # (col + 2) Reefer container(kVA)
+        ref_kva_cell = ws.cell(row=r_idx, column=new_table_start_col + 2)
+        ref_kva_cell.value = f"={ref_feu_cell_coord}*${tr_k_per_cntr_addr}$"
+
+        # (col + 6) TR capacity(kVA)
+        total_cap_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 5).coordinate
+        tr_cap_cell = ws.cell(row=r_idx, column=new_table_start_col + 6)
+        tr_cap_cell.value = f"=IFERROR({total_cap_cell_coord}/${tr_eff_addr}$,0)"
+    # --- [끝] ---
 
 
 # --------------------------------
@@ -1180,7 +1383,7 @@ class GridCanvas(ttk.Frame):
             success = False
             if b.rows >= 6:
                 success = self._solve_line_tiling(b, left_active, "LEFT", placements) and \
-                          self._solve_line_tiling(b, right_active, "RIGHT", placements)
+                           self._solve_line_tiling(b, right_active, "RIGHT", placements)
             else:
                 right_placements, left_placements = [], []
                 if self._solve_tiling_recursive(b, right_active, "RIGHT", right_placements):
