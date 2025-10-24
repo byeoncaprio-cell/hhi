@@ -378,20 +378,16 @@ def write_excel(
         except ValueError: rpr = 0
             
         # --- [BUG FIX: Sheet Name ' 처리] ---
-        # 엑셀 수식에서 시트 이름에 ' (작은따옴표)가 포함된 경우
-        # (예: 'My'Ship') 오류가 발생하지 않도록 '' (따옴표 두 개)로 이스케이프합니다.
         sheet_name_for_formula = sheet_name.replace("'", "''")
         
         data_range_str = (
-            f"'{sheet_name_for_formula}'!" # 수정된 시트 이름 사용
+            f"'{sheet_name_for_formula}'!"
             f"{get_column_letter(grid_start_col)}{data_start_row}:"
             f"{get_column_letter(grid_right_col)}{last_used_row}"
         )
-        # --- [END BUG FIX] ---
             
         summary_ws = wb.create_sheet(title="Summary")
         
-        # 헬퍼 함수 _write_summary_sheet_v5 호출
         _write_summary_sheet_v5(
             summary_ws, 
             rs_total, 
@@ -415,12 +411,6 @@ def _write_summary_sheet_v5(
 ):
     """
     (V5) RS/RD 병합, 폰트 축소, Grand Total 제거 + 추가 표 (행 제목 포함) 추가
-    ... (이전 수정 내역) ...
-    --- [USER MODIFIED 14] ---
-    - REQ 1: 왼쪽 표(PORT/STBD) 열 너비 재조정 (사용자 지정 값)
-    - REQ 2: Reefer Section Board 표 열 너비 재조정 (사용자 지정 값)
-    --- [USER MODIFIED 15] ---
-    - REQ 1: 모든 표 열 너비 +1 적용
     """
 
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -436,16 +426,13 @@ def _write_summary_sheet_v5(
     stbd_font = Font(size=10, bold=True, color="974706")
     port_font = Font(size=10, bold=True, color="7030A0")
     
-    title_font = Font(size=13, bold=True) # 14 -> 13
-    header_fill = PatternFill("solid", fgColor="DDEEFF") # RS/RD 헤더와 동일한 색상
+    title_font = Font(size=13, bold=True)
+    header_fill = PatternFill("solid", fgColor="DDEEFF")
     total_fill = PatternFill("solid", fgColor="F0F0F0")
 
-    # 행 제목 및 데이터 제목에 사용할 스타일
     align_left_wrap = Alignment(horizontal="left", vertical="center", wrap_text=True) 
     align_right = Alignment(horizontal="right", vertical="center")
     align_center_wrap = Alignment(horizontal="center", vertical="center", wrap_text=True) 
-    
-    # 제목용 왼쪽 정렬 추가
     align_left = Alignment(horizontal="left", vertical="center") 
     
     thin_side = Side(style="thin", color="000000")
@@ -457,7 +444,6 @@ def _write_summary_sheet_v5(
     
     headers = ["RS", "RD", "REF. CON", "A", "BREAKER", "CABLE", "KVA"]
     
-    # 왼쪽 표(PORT/STBD) 열 너비 (기존 값 + 1)
     col_widths = [7.5, 7.5, 8.5, 8, 10.5, 10.5, 9.5] 
 
     # --- 3. 테이블 작성 헬퍼 함수 ---
@@ -476,9 +462,7 @@ def _write_summary_sheet_v5(
             if col_num > 0:
                 try:
                     col_letter = get_column_letter(col_num)
-                    # openpyxl은 소수점 너비를 지원하지 않으므로 반올림
-                    ws.column_dimensions[col_letter].width = round(width + 0.00001) # 소수점 처리
-                    # auto_size를 명시적으로 비활성화하여 자동 조정을 방지
+                    ws.column_dimensions[col_letter].width = round(width + 0.00001)
                     ws.column_dimensions[col_letter].auto_size = False
                 except ValueError:
                     print(f"Warning: Invalid column number {col_num} for width setting.")
@@ -506,7 +490,7 @@ def _write_summary_sheet_v5(
                 apply_styles(ws.cell(cur_row, c_offset+i), border=table_border)
             ws.cell(cur_row, c_offset, "-")
             cur_row += 1
-            return cur_row, rs_totals # 빈 딕셔너리 반환
+            return cur_row, rs_totals
 
         for rs in rs_list:
         
@@ -523,17 +507,17 @@ def _write_summary_sheet_v5(
                 ws.merge_cells(start_row=cur_row, start_column=c_offset + 1, end_row=cur_row, end_column=c_offset + 6)
                 rs_cell = ws.cell(cur_row, c_offset, f"RS-{rs}")
                 apply_styles(rs_cell, font=bold_font, align=align_left_wrap, border=table_border)
-                rd_cell = ws.cell(cur_row, c_offset + 1, "  (No RDs)") # 여기는 RD 없으므로 공백 유지
+                rd_cell = ws.cell(cur_row, c_offset + 1, "  (No RDs)")
                 apply_styles(rd_cell, align=align_left_wrap, border=table_border)
-                for i in range(2, 7): # CABLE 열 포함 7
+                for i in range(2, 7):
                     apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
                 cur_row += 1
                 rs_start_row_for_sum = -1
             else:
                 for rd in rd_list:
-                    # c_offset + 2: REF.CON / c_offset + 3: A (D열 또는 L열)
+                    # c_offset + 2: REF.CON / c_offset + 3: A
                     ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}" 
-                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}" # D열 또는 L열 참조
+                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}" # D열 또는 L열
                     
                     apply_styles(ws.cell(cur_row, c_offset), border=table_border)
                     
@@ -550,15 +534,17 @@ def _write_summary_sheet_v5(
                     apply_styles(a_cell, align=align_right, border=table_border, num_format='0.00')
                     
                     # BREAKER 수식
-                    breaker_cell = ws.cell(cur_row, c_offset + 4, value=f'=IF({a_cell_addr}>=800,"1250/900",IF({a_cell_addr}>=700,"800/800","800/700"))')
+                    breaker_cell = ws.cell(cur_row, c_offset + 4, value=f'=IF(ROUND({a_cell_addr},2)>=800,"1250/900",IF(ROUND({a_cell_addr},2)>=700,"800/800","800/700"))')
                     apply_styles(breaker_cell, align=align_center_wrap, border=table_border)
                     
-                    
-                    # --- [CABLE 수식 삭제 및 빈칸 유지] ---
-                    cable_cell = ws.cell(cur_row, c_offset + 5) # F열 또는 N열
-                    cable_cell.value = "" # 수식 삭제, 빈 값으로 설정
-                    apply_styles(cable_cell, border=table_border, align=align_center_wrap) # 기본 스타일 적용
-                    # --- [CABLE 수식 삭제 완료] ---
+                    # --- [CABLE 열 수식 추가] ---
+                    cable_cell = ws.cell(cur_row, c_offset + 5)  # F열 또는 N열 (CABLE)
+                    cable_cell.value = (
+                        f'=IF(ROUND({a_cell_addr},2)>=688.6,"6xT70(169A)",'
+                        f'IF(ROUND({a_cell_addr},2)>=626,"5xT70(169A)",""))'
+                    )
+                    apply_styles(cable_cell, border=table_border, align=align_center_wrap)
+                    # --- [끝] ---
                     
                     # KVA 수식
                     kva_cell = ws.cell(cur_row, c_offset + 6, value=f"={ref_con_cell_addr}*10.6") 
@@ -566,7 +552,7 @@ def _write_summary_sheet_v5(
                     cur_row += 1
 
                 rs_end_row = cur_row - 1
-                # RS 셀 병합 및 스타일 적용 (반복문 바깥)
+                # RS 셀 병합 및 스타일 적용
                 ws.merge_cells(start_row=rs_start_row, start_column=c_offset, end_row=rs_end_row, end_column=c_offset)
                 rs_cell = ws.cell(rs_start_row, c_offset, f"RS-{rs}")
                 apply_styles(rs_cell, font=bold_font, align=align_center_wrap, border=table_border)
@@ -586,18 +572,18 @@ def _write_summary_sheet_v5(
 
             if rs_start_row_for_sum == -1:
                 ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
-                ref_total_coord = "0" # 주소 대신 0 사용
+                ref_total_coord = "0"
             else:
                 rs_end_row_for_sum = cur_row - spare_rows - 1
                 ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
                 a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
                 kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
-                ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}" # Total 셀의 주소
+                ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}"
 
             ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
             apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
             
-            rs_totals[rs] = ref_total_coord # 0 또는 실제 주소 저장
+            rs_totals[rs] = ref_total_coord
 
             a_total_cell = ws.cell(cur_row, c_offset + 3, value=a_sum_formula)
             apply_styles(a_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
@@ -605,11 +591,11 @@ def _write_summary_sheet_v5(
             apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border) # BREAKER Total (blank)
             apply_styles(ws.cell(cur_row, c_offset+5), fill=total_fill, border=table_border) # CABLE Total (blank)
             
-            kva_total_cell = ws.cell(cur_row, c_offset + 6, value=kva_sum_formula) # KVA Total
+            kva_total_cell = ws.cell(cur_row, c_offset + 6, value=kva_sum_formula)
             apply_styles(kva_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
             cur_row += 1
 
-            cur_row += 1 # 각 RS 블록 뒤에 한 줄 여백 추가
+            cur_row += 1
             
         return cur_row, rs_totals 
 
@@ -626,12 +612,10 @@ def _write_summary_sheet_v5(
     set_column_widths(port_col_offset, col_widths)
     set_column_widths(stbd_col_offset, col_widths)
     
-    # 간격 열 너비 설정 (첫 번째 간격)
     gap_col_1_idx = port_col_offset + len(col_widths)
     ws.column_dimensions[get_column_letter(gap_col_1_idx)].width = 5 
-    ws.column_dimensions[get_column_letter(gap_col_1_idx)].auto_size = False # 자동 조정 방지
+    ws.column_dimensions[get_column_letter(gap_col_1_idx)].auto_size = False
 
-    # PORT/STBD 제목 행 2로 변경
     ws.merge_cells(start_row=2, start_column=port_col_offset, end_row=2, end_column=port_col_offset + len(headers) - 1)
     port_title_cell = ws.cell(row=2, column=port_col_offset, value=port_title)
     apply_styles(port_title_cell, font=title_font, align=align_center_wrap)
@@ -640,7 +624,6 @@ def _write_summary_sheet_v5(
     stbd_title_cell = ws.cell(row=2, column=stbd_col_offset, value=stbd_title)
     apply_styles(stbd_title_cell, font=title_font, align=align_center_wrap)
     
-    # process_rs_list 호출 (시작행 3)
     data_start_row = 3 
     port_next_row, port_totals = process_rs_list(
         even_rs, data_start_row, port_col_offset,
@@ -651,19 +634,15 @@ def _write_summary_sheet_v5(
         headers, bold_font, header_fill, align_center_wrap, table_border
     )
     
-    all_rs_totals = {**port_totals, **stbd_totals} # 수식용 Total 주소 통합
-    rs_tables_end_row = max(port_next_row, stbd_next_row) - 1 # 실제 데이터 마지막 행
+    all_rs_totals = {**port_totals, **stbd_totals}
+    rs_tables_end_row = max(port_next_row, stbd_next_row) - 1
  
-    
-    # --- [MODIFIED] 추가 표 (행 제목 포함) 작성 ---
     new_table_start_col = stbd_col_offset + len(headers) + 2
 
-    # 간격 열 너비 설정 (두 번째 간격)
     gap_col_2_idx = new_table_start_col - 1
     ws.column_dimensions[get_column_letter(gap_col_2_idx)].width = 5
-    ws.column_dimensions[get_column_letter(gap_col_2_idx)].auto_size = False # 자동 조정 방지
+    ws.column_dimensions[get_column_letter(gap_col_2_idx)].auto_size = False
 
-    # --- 표 1: Cargo Hold Fans (원본 레이아웃 유지) ---
     table1_row_titles = [
         "SIDE PASSGAEWAY(FWD)", "No.1A (Exp)", "No.2F (Exp)", "No.3F", "No.4F",
         "SIDE PASSAGEWAY(AFT)", "No.5F1", "No.5F2", "No.5A1", "No.5A2",
@@ -678,70 +657,39 @@ def _write_summary_sheet_v5(
         "Actual power consumption(PORT, kW)"
     ]
     
-    # --- [코드 수정 5/5] ---
-    # Cargo Hold Fan 표 열 너비 재조정 (이전 값 + 1)
-    table1_row_title_width = 22 + 1 # 23
+    table1_row_title_width = 23
     table1_data_widths = [
-        15.25 + 1,     # 16.25
-        22 + 1,        # 23
-        12.25 + 1,     # 13.25
-        10.75 + 1,     # 11.75
-        15.5 + 1,      # 16.5
-        13.5 + 1,      # 14.5
-        14.25 + 1,     # 15.25
-        6.25 + 1,      # 7.25
-        10.75 + 1,     # 11.75
-        10.75 + 1,     # 11.75
-        10.75 + 1      # 11.75
+        16.25, 23, 13.25, 11.75, 16.5, 14.5, 15.25, 7.25, 11.75, 11.75, 11.75
     ]
-    # --- [끝] ---
 
-    # Cargo Hold Fan 표 제목 추가
     fan_title_row = 1
     fan_table_end_col = new_table_start_col + len(table1_data_headers) -1
     ws.merge_cells(start_row=fan_title_row, start_column=new_table_start_col, end_row=fan_title_row, end_column=fan_table_end_col)
     fan_title_cell = ws.cell(row=fan_title_row, column=new_table_start_col, value="Reefer section에서 배전되는 Fans")
-    
-    # 제목 왼쪽 정렬 적용
     apply_styles(fan_title_cell, font=bold_font, align=align_left) 
 
-    # Cargo Hold 표 시작 행 2로 수정
     table1_header_row = 2
     
-    # 1. 첫 번째 열 너비 설정
     ws.column_dimensions[get_column_letter(new_table_start_col)].width = round(table1_row_title_width + 0.00001)
-    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False # 자동 조정 방지
-    # 2. 나머지 데이터 열 너비 설정
+    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False
     set_column_widths(new_table_start_col + 1, table1_data_widths)
 
-    
-    # 3. 데이터 열 헤더(가로 제목) 쓰기
     for i, header in enumerate(table1_data_headers):
         col_idx = new_table_start_col + i
         cell = ws.cell(row=table1_header_row, column=col_idx, value=header)
-        
-        # 기본 폰트(bold_font)로 설정
         current_font = bold_font
-        if i in [0, 1, 10]: # STBD (Indices 0, 1, 10)
-            current_font = stbd_font # STBD 폰트 적용
-        elif i in [2, 3, 11]: # PORT (Indices 2, 3, 11)
-            current_font = port_font # PORT 폰트 적용
-        
-        # 모든 헤더에 기본 채우기(header_fill)와 조건부 폰트 적용
+        if i in [0, 1, 10]:
+            current_font = stbd_font
+        elif i in [2, 3, 11]:
+            current_font = port_font
         apply_styles(cell, font=current_font, fill=header_fill, align=align_center_wrap, border=table_border)
 
-    # 4. 첫 번째 열 데이터 (구 '행 제목') 및 빈 데이터 셀 쓰기
-    current_row_for_fan_table = table1_header_row + 1 # Fan 표 전용 행 카운터
+    current_row_for_fan_table = table1_header_row + 1
     for title in table1_row_titles:
-        # 첫 번째 열(new_table_start_col)에 데이터 쓰기
         cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col, value=title)
-        apply_styles(cell, align=align_left_wrap, border=table_border) # 세로 항목은 Bold 없음
-        
-        
-        # Fan Table의 수식 및 값 채우기 루프
+        apply_styles(cell, align=align_left_wrap, border=table_border)
         
         row_num = current_row_for_fan_table
-        # 수식에 사용할 열 문자 계산
         stbd_fans_col = get_column_letter(new_table_start_col + 1)
         port_fans_col = get_column_letter(new_table_start_col + 3)
         total_fans_col = get_column_letter(new_table_start_col + 4) 
@@ -751,73 +699,49 @@ def _write_summary_sheet_v5(
         div_col = get_column_letter(new_table_start_col + 8)
         actual_power_col = get_column_letter(new_table_start_col + 9)
 
-        # table1_data_headers의 1번 인덱스부터 11번 인덱스까지 (총 11개)
-        for i in range(len(table1_data_headers) - 1): # i는 0부터 10까지
+        for i in range(len(table1_data_headers) - 1):
             col_idx = new_table_start_col + 1 + i
-            header_index = i + 1 # header_index는 1부터 11까지
+            header_index = i + 1
             cell = ws.cell(row=current_row_for_fan_table, column=col_idx)
             
             value_to_add = None
             num_format = None
-            align = align_right # 기본값 오른쪽 정렬
+            align = align_right
             
-            # Cargo hold(PORT) 열에 STBD와 동일한 행 제목(title) 복사
-            if header_index == 2: # "Cargo hold(PORT)"
+            if header_index == 2:
                 value_to_add = title
-                align = align_left_wrap # 왼쪽 정렬
-
-            # Total No. of C/Hold fans
-            elif header_index == 4: # "Total No. of C/Hold fans"
+                align = align_left_wrap
+            elif header_index == 4:
                 value_to_add = f"=SUM(${stbd_fans_col}{row_num},${port_fans_col}{row_num})"
-                num_format = '0' # 정수
-
-            # Efficiency
-            elif header_index == 6: # Efficiency
+                num_format = '0'
+            elif header_index == 6:
                 value_to_add = 0.88
                 num_format = '0.00'
-  
-            # Load factor
-            elif header_index == 7: # Load factor
+            elif header_index == 7:
                 value_to_add = 0.8
                 num_format = '0.0'
-
-            # Div. factor
-            elif header_index == 8: # Div. factor
+            elif header_index == 8:
                 value_to_add = 1
                 num_format = '0'
-            
-            # Actual power consumption (kW)
-            elif header_index == 9: # "Actual power consumption (kW)"
-                # =IFERROR((Rated, kW / Efficiency) * Load factor * Div. factor, 0)
+            elif header_index == 9:
                 value_to_add = f"=IFERROR((${cap_col}{row_num}/${eff_col}{row_num})*${load_col}{row_num}*${div_col}{row_num}, 0)"
                 num_format = '0.00'
-
-            # Actual power consumption(STBD, kW)
-            elif header_index == 10: # "Actual power consumption(STBD, kW)"
-                # =IFERROR(Actual power (kW) * No. of C/Hold fans (STBD), 0)
+            elif header_index == 10:
                 value_to_add = f"=IFERROR(${actual_power_col}{row_num}*${stbd_fans_col}{row_num}, 0)"
                 num_format = '0.00'
-            
-            # Actual power consumption(PORT, kW)
-            elif header_index == 11: # "Actual power consumption(PORT, kW)"
-                # =IFERROR(Actual power (kW) * No. of C/Hold fans (PORT), 0)
+            elif header_index == 11:
                 value_to_add = f"=IFERROR(${actual_power_col}{row_num}*${port_fans_col}{row_num}, 0)"
                 num_format = '0.00'
 
-            
             if value_to_add is not None:
                 cell.value = value_to_add
                 apply_styles(cell, border=table_border, align=align, num_format=num_format)
             else:
-                # 값이 없는 다른 셀들은 테두리만 적용
                 apply_styles(cell, border=table_border)
         
         current_row_for_fan_table += 1
-    fan_table_end_row = current_row_for_fan_table -1 # Fan 테이블 실제 마지막 행
+    fan_table_end_row = current_row_for_fan_table -1
 
-
-    # --- 표 2: Reefer Section Board (행/열 전환) ---
-    
     table2_horizontal_headers = [
         "Reefer Section board", "Ref. container(FEU)", "Reefer container(kVA)",
         "Cargo fan(kVA)", "SOx Scrubber", "Total capacity(kVA)", "TR capacity(kVA)",
@@ -830,120 +754,94 @@ def _write_summary_sheet_v5(
             suffix = "(S)" if i % 2 == 1 else "(P)"
             table2_vertical_headers.append(f"RS-{i} {suffix}")
             
-    # Reefer Section Board 표 열 너비 재조정 (이전 값 + 1)
-    table2_vertical_header_width = 22 + 1 # 23
+    table2_vertical_header_width = 23
     table2_data_widths = [16.25, 23, 13.25, 11.75, 16.5, 14.5, 15.25] 
 
-    # Fan 테이블 바로 아래 + 2줄 간격 시작
-    reefer_title_row = fan_table_end_row + 2 # 제목 행 위치
-    table2_header_row = reefer_title_row + 1 # 헤더 행 위치 
+    reefer_title_row = fan_table_end_row + 2
+    table2_header_row = reefer_title_row + 1 
     
-    # Reefer CNTR 계산 제목 추가 및 왼쪽 정렬
     reefer_table_end_col = new_table_start_col + len(table2_horizontal_headers) - 1
     ws.merge_cells(start_row=reefer_title_row, start_column=new_table_start_col, end_row=reefer_title_row, end_column=reefer_table_end_col)
     reefer_title_cell = ws.cell(row=reefer_title_row, column=new_table_start_col, value="Reefer CNTR 계산")
-    apply_styles(reefer_title_cell, font=bold_font, align=align_left) # 왼쪽 정렬 적용
+    apply_styles(reefer_title_cell, font=bold_font, align=align_left)
 
-    # 1. 첫 번째 열 너비 설정
     ws.column_dimensions[get_column_letter(new_table_start_col)].width = round(table2_vertical_header_width)
-    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False # 자동 조정 방지
-    # 2. 나머지 데이터 열 너비 설정
+    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False
     set_column_widths(new_table_start_col + 1, table2_data_widths) 
 
-    # 3. (신) 가로 헤더 (기존 Row Titles) 쓰기
     for i, header in enumerate(table2_horizontal_headers):
         col_idx = new_table_start_col + i
         cell = ws.cell(row=table2_header_row, column=col_idx, value=header)
         apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
         
-    # 4. (신) 세로 헤더 (데이터) (기존 Data Headers - RS 목록) 쓰기
-    current_row_for_reefer_table = table2_header_row + 1 # Reefer 표 전용 행 카운터
+    current_row_for_reefer_table = table2_header_row + 1
     
     table2_colors = ["EBF1DE", "D8E4BC", "E4DFEC", "CCC0DA", "DAEEF3", "B7DEE8"]
     num_colors = len(table2_colors)
     
     for idx, title in enumerate(table2_vertical_headers):
-        rs_index = idx + 1 # RS-1, RS-2...
+        rs_index = idx + 1 
         
         color_hex = table2_colors[idx % num_colors]
         row_fill = PatternFill("solid", fgColor=color_hex)
 
-        # 첫 번째 열(new_table_start_col)에 (신) 세로 헤더 쓰기
         cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col, value=title)
         apply_styles(cell, align=align_left_wrap, border=table_border, font=bold_font, fill=row_fill)
         
-        # (col + 1) Ref. container(FEU)
-        ref_con_total_addr = all_rs_totals.get(rs_index, "0") # 존재하지 않으면 "0"
+        ref_con_total_addr = all_rs_totals.get(rs_index, "0")
         ref_feu_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 1, value=f"={ref_con_total_addr}")
         apply_styles(ref_feu_cell, border=table_border, fill=row_fill, align=align_right, num_format='0')
 
-        # (col + 2) Reefer container(kVA) - (수식은 아래 2x2표 생성 후 채움)
         ref_kva_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 2)
         apply_styles(ref_kva_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
 
-        # (col + 3) Cargo fan(kVA)
         cargo_fan_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 3)
         apply_styles(cargo_fan_cell, border=table_border, fill=row_fill)
 
-        # (col + 4) SOx Scrubber
         sox_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 4)
         apply_styles(sox_cell, border=table_border, fill=row_fill)
         
-        # (col + 5) Total capacity(kVA)
         total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 5, value=f"=SUM({ref_kva_cell.coordinate},{cargo_fan_cell.coordinate},{sox_cell.coordinate})")
         apply_styles(total_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
 
-        # (col + 6) TR capacity(kVA) - (수식은 아래 2x2표 생성 후 채움)
         tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 6)
         apply_styles(tr_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
     
-        # (col + 7) TR capacity(SPEC)
         tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 7)
         apply_styles(tr_spec_cell, border=table_border, fill=row_fill)
 
         current_row_for_reefer_table += 1
-    reefer_table_end_row = current_row_for_reefer_table - 1 # Reefer 테이블 실제 마지막 행
+    reefer_table_end_row = current_row_for_reefer_table - 1
 
-    # --- 2x2 추가 표 (TR / efficiency) ---
-    tr_table_start_row = reefer_table_end_row + 2 # Reefer 표 아래 1줄 여백
+    tr_table_start_row = reefer_table_end_row + 2
 
-    # Row 1
     cell_r1_c1 = ws.cell(row=tr_table_start_row, column=new_table_start_col, value="Reefer cntr for TR")
-    apply_styles(cell_r1_c1, align=align_left_wrap, border=table_border, font=bold_font) # 테두리 적용
+    apply_styles(cell_r1_c1, align=align_left_wrap, border=table_border, font=bold_font)
     cell_r1_c2 = ws.cell(row=tr_table_start_row, column=new_table_start_col + 1, value=10.6)
-    apply_styles(cell_r1_c2, align=align_right, border=table_border, num_format='0.0" kVA"') # 테두리 적용
+    apply_styles(cell_r1_c2, align=align_right, border=table_border, num_format='0.0" kVA"')
     
-    # $열$행 형식의 절대 주소로 저장 (예: $R$30)
     tr_k_per_cntr_addr_abs = f"${get_column_letter(cell_r1_c2.column)}${cell_r1_c2.row}"
     
-    # Row 2
     tr_table_current_row = tr_table_start_row + 1
     cell_r2_c1 = ws.cell(row=tr_table_current_row, column=new_table_start_col, value="TR efficiency")
-    apply_styles(cell_r2_c1, align=align_left_wrap, border=table_border, font=bold_font) # 테두리 적용
+    apply_styles(cell_r2_c1, align=align_left_wrap, border=table_border, font=bold_font)
     
     cell_r2_c2 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 1, value=0.95)
-    apply_styles(cell_r2_c2, align=align_right, border=table_border, num_format='0.00') # 테두리 적용
+    apply_styles(cell_r2_c2, align=align_right, border=table_border, num_format='0.00')
 
-    # $열$행 형식의 절대 주소로 저장 (예: $R$31)
     tr_eff_addr_abs = f"${get_column_letter(cell_r2_c2.column)}${cell_r2_c2.row}"
 
-    # 메모 서식
     cell_r2_c3 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 2, value="실제 TR도면 접수 후 다시 기입")
-    apply_styles(cell_r2_c3, align=align_left_wrap, border=None, font=small_font) # 테두리 없음
+    apply_styles(cell_r2_c3, align=align_left_wrap, border=None, font=small_font)
 
-    # Reefer 표 수식 재설정 (2x2 표 주소 확정 후)
     for r_idx in range(table2_header_row + 1, reefer_table_end_row + 1):
         ref_feu_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 1).coordinate
         
-        # (col + 2) Reefer container(kVA)
         ref_kva_cell = ws.cell(row=r_idx, column=new_table_start_col + 2)
-        # 올바른 절대 주소 변수 사용 (예: =Q29*$R$30)
         ref_kva_cell.value = f"={ref_feu_cell_coord}*{tr_k_per_cntr_addr_abs}"
 
-        # (col + 6) TR capacity(kVA)
         total_cap_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 5).coordinate
         tr_cap_cell = ws.cell(row=r_idx, column=new_table_start_col + 6)
-        # 올바른 절대 주소 변수 사용 (예: =IFERROR(U29/$R$31,0))
         tr_cap_cell.value = f"=IFERROR({total_cap_cell_coord}/{tr_eff_addr_abs},0)"
 
 
@@ -995,7 +893,6 @@ class GridCanvas(ttk.Frame):
         ttk.Spinbox(cfg, from_=0, to=999, textvariable=self.rd_per_rs, width=8).grid(row=0, column=3, sticky="w", pady=2)
 
         # --- [GUI MOD] ---
-        # (Even / Odd) 텍스트가 제거된 버전으로 복원
         summary_frame = ttk.LabelFrame(right, text="Live Summary", padding=10)
         summary_frame.pack(fill="both", expand=True, pady=(0, 10)) 
 
@@ -1004,11 +901,11 @@ class GridCanvas(ttk.Frame):
 
         alloc = ttk.Frame(summary_frame); alloc.pack(fill="both", expand=True)
         left_col = ttk.Frame(alloc); left_col.pack(side="left", fill="both", expand=True, padx=(0,5))
-        ttk.Label(left_col, text="PORT RS").pack(anchor="w") # " (Even)" 제거
+        ttk.Label(left_col, text="PORT RS").pack(anchor="w")
         self.txt_even = tk.Text(left_col, width=15, height=34, font=("Consolas", 10)); self.txt_even.pack(fill="both", expand=True); self.txt_even.configure(state="disabled")
         
         right_col = ttk.Frame(alloc); right_col.pack(side="left", fill="both", expand=True, padx=(5,0))
-        ttk.Label(right_col, text="STBD RS").pack(anchor="w") # " (Odd)" 제거
+        ttk.Label(right_col, text="STBD RS").pack(anchor="w")
         self.txt_odd = tk.Text(right_col, width=15, height=34, font=("Consolas", 10)); self.txt_odd.pack(fill="both", expand=True); self.txt_odd.configure(state="disabled")
         # --- [END GUI MOD] ---
 
@@ -1087,7 +984,7 @@ class GridCanvas(ttk.Frame):
             'canvas_data': (copy.deepcopy(self.cell_colors), copy.deepcopy(self.cell_numbers), copy.deepcopy(self.sockets))
         }
         self.undo_stack.append(state)
-        if len(self.undo_stack) > 10:  # Keep last 10 states
+        if len(self.undo_stack) > 10:
             self.undo_stack.pop(0)
 
     def undo(self):
@@ -1101,7 +998,7 @@ class GridCanvas(ttk.Frame):
         self.cell_colors, self.cell_numbers, self.sockets = state['canvas_data']
 
         if self.editing_index is not None:
-            self.edit_selected() # Reload editor if it was active
+            self.edit_selected()
         else:
             self.draw_all()
 
@@ -1120,8 +1017,6 @@ class GridCanvas(ttk.Frame):
     def _recompute_all(self, *args):
         self._update_allocation_display()
 
-    # --- [GUI MOD] ---
-    # _update_allocation_display (Port/Stbd 텍스트 박스 업데이트)
     def _update_allocation_display(self):
         try:
             rs_total = int(self.rs_count.get() or 0)
@@ -1136,17 +1031,14 @@ class GridCanvas(ttk.Frame):
         rd_counts = _collect_rd_counts(self.items)
    
         grand_total = sum(rd_counts.values())
-        # [BUG FIX] Grand Total이 실제 값을 반영하도록 수정
         self.grand_total_label.config(text=f"Grand Total: {grand_total}")
 
-        # Port/Stbd 텍스트 박스 업데이트 로직
         for txt_widget, indices in [(self.txt_even, even_rs), (self.txt_odd, odd_rs)]:
             content = _build_rs_summary(indices, rd_counts, rpr)
             txt_widget.config(state="normal")
             txt_widget.delete("1.0", tk.END)
             txt_widget.insert(tk.END, content)
             txt_widget.config(state="disabled")
-    # --- [END GUI MOD] ---
 
     def pick_color(self):
         _, hx = colorchooser.askcolor(color=self.current_color.get(), title="Pick Color")
@@ -1275,7 +1167,6 @@ class GridCanvas(ttk.Frame):
     def _write_gang_counts(self, counts):
         for g in range(3, 10): self.gang_vars[g].set(str(counts.get(g, 0)))
 
-    # --- 수정된 함수 ---
     def edit_selected(self, event=None):
         sel = self.items_list.curselection()
         if not sel:
@@ -1291,14 +1182,12 @@ class GridCanvas(ttk.Frame):
         self.cell_colors, self.cell_numbers, self.sockets = dict(b.cell_colors), dict(b.cell_numbers), set(b.sockets)
         self._write_gang_counts(b.gang_counts)
         
-        # --- 블록 행 수에 따라 Hatch/Hold 자동 선택 ---
         if b.rows >= 6:
             self.meta_label_type.set("Hold No")
             self.meta_no.set(b.hold)
         else:
             self.meta_label_type.set("Hatch No")
             self.meta_no.set(b.hatch)
-        # -----------------------------------------
             
         self.meta_bay.set(b.bay); self.meta_deck.set(b.deck)
         self.draw_all()
@@ -1339,7 +1228,6 @@ class GridCanvas(ttk.Frame):
         self.items.insert(pos, SectionHeader(title=title))
         self.refresh_list()
 
-    # --- 수정된 함수 ---
     def import_from_excel(self):
         path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xlsm")])
         if not path: return
@@ -1359,13 +1247,11 @@ class GridCanvas(ttk.Frame):
                 if not values: raise ValueError
                 rows, cols = len(values), max(values)
                 
-                # --- 블록 생성 시 Hatch/Hold 자동 할당 ---
                 b = Block(rows=rows, cols=cols)
                 if rows >= 6:
-                    b.hold = str(row[0]).strip() # 엑셀 첫번째 열을 기본 번호로 사용
+                    b.hold = str(row[0]).strip()
                 else:
-                    b.hatch = str(row[0]).strip() # 엑셀 첫번째 열을 기본 번호로 사용
-                # ---------------------------------------
+                    b.hatch = str(row[0]).strip()
                     
                 for r_idx, cnt in enumerate(values, 1):
                     start_c = 1 + (cols - cnt) // 2
@@ -1397,7 +1283,6 @@ class GridCanvas(ttk.Frame):
     # =================================================================
     # Auto Set 그룹 (메인 로직)
     # =================================================================
-    # --- [MODIFIED] V10 (목표량 기반 순차 할당 + 후-채우기) 로직 ---
     def auto_set_groups(self):
         self._save_state_for_undo()
         sel = self.items_list.curselection()
@@ -1417,8 +1302,7 @@ class GridCanvas(ttk.Frame):
             
         even_list, odd_list = _build_rd_queues(rs_total, rpr)
 
-        # --- PASS 1: "배치하기" (모양 찾기 및 총계 계산) ---
-        
+        # PASS 1
         all_left_placements = []
         all_right_placements = []
         total_left_cells = 0
@@ -1458,7 +1342,6 @@ class GridCanvas(ttk.Frame):
                 any_failure = True
                 continue
 
-            # 모양(Placement) 정렬 및 집계
             left_placements_b = [p for p in placements if p['side'] == 'LEFT']
             right_placements_b = [p for p in placements if p['side'] == 'RIGHT']
 
@@ -1473,14 +1356,10 @@ class GridCanvas(ttk.Frame):
                 all_right_placements.append( (b, p) ) 
                 total_right_cells += p['size']
 
-        # --- END PASS 1 ---
-
         if any_failure:
             return
 
-        # --- PASS 2: "숫자 배당하기" (목표량 계산 및 순차 할당 + 후-채우기) ---
-
-        # 2a. PORT/Even (Left) 목표량 및 실제 남은 용량 초기화
+        # PASS 2
         target_counts_even = {} 
         rd_remaining_even = {rd: cap for rd in even_list} 
         total_even_rds = len(even_list)
@@ -1490,7 +1369,6 @@ class GridCanvas(ttk.Frame):
             for i, rd in enumerate(even_list):
                 target_counts_even[rd] = avg_cap_even + (1 if i < rem_even else 0)
         
-        # 2b. STBD/Odd (Right) 목표량 및 실제 남은 용량 초기화
         target_counts_odd = {} 
         rd_remaining_odd = {rd: cap for rd in odd_list} 
         total_odd_rds = len(odd_list)
@@ -1500,50 +1378,35 @@ class GridCanvas(ttk.Frame):
             for i, rd in enumerate(odd_list):
                 target_counts_odd[rd] = avg_cap_odd + (1 if i < rem_odd else 0)
 
-        # 2c. PORT/Even (Left) 목표량 기반 순차 배당 (+ 후-채우기)
         cur_even = [0] 
         for (b, p) in all_left_placements: 
             need = p['size'] 
             cells = p['cells'] 
-            
             assigned_rd = self._rd_take_v10(need, target_counts_even, rd_remaining_even, even_list, cur_even)
-            
             if assigned_rd is not None:
                 color = self._pick_color(cells, b)
                 for cell in cells:
                     b.cell_numbers[cell] = assigned_rd
                     b.cell_colors[cell] = color
                 b.gang_counts[need] = b.gang_counts.get(need, 0) + 1
-            else:
-                 print(f"INFO: Could not assign LEFT placement size {need}. All even RDs might be full or cannot accommodate.")
 
-        # 2d. STBD/Odd (Right) 목표량 기반 순차 배당 (+ 후-채우기)
         cur_odd = [0] 
         for (b, p) in all_right_placements: 
             need = p['size'] 
             cells = p['cells'] 
-
             assigned_rd = self._rd_take_v10(need, target_counts_odd, rd_remaining_odd, odd_list, cur_odd)
-            
             if assigned_rd is not None:
                 color = self._pick_color(cells, b)
                 for cell in cells:
                     b.cell_numbers[cell] = assigned_rd
                     b.cell_colors[cell] = color
                 b.gang_counts[need] = b.gang_counts.get(need, 0) + 1
-            else:
-                 print(f"INFO: Could not assign RIGHT placement size {need}. All odd RDs might be full or cannot accommodate.")
 
-        # --- END PASS 2 ---
-        
         if self.editing_index is not None: self.edit_selected() 
         self.refresh_list() 
         self._recompute_all() 
         messagebox.showinfo("Auto Set", "자동 배치 완료 (V10: 목표량+후-채우기 적용)")
-    # --- [END MODIFIED] ---
 
-
-    # --- 6행 이상 블록을 위한 1줄 배치 전용 함수 ---
     def _solve_line_tiling(self, b: Block, side_active: Set[Cell], side: str, placements: List[Dict]) -> bool:
         def partition(length: int) -> Optional[List[int]]:
             sizes = sorted([s for s in SHAPE_LIBRARY.keys() if s <= length], reverse=True)
@@ -1584,7 +1447,6 @@ class GridCanvas(ttk.Frame):
                     ptr += size
         return True
 
-    # --- 5행 이하 블록을 위한 백트래킹 함수 ---
     def _solve_tiling_recursive(self, b: Block, unfilled: Set[Cell], side: str, placements: List[Dict]) -> bool:
         if not unfilled:
             return True
@@ -1594,7 +1456,6 @@ class GridCanvas(ttk.Frame):
 
         priority_sizes = [9, 7, 8, 6, 5, 4]
         
-        # 1. 비-라인(다차원) 형태 먼저 시도
         for size in priority_sizes:
             for shape_pattern in SHAPE_LIBRARY.get(size, []):
                 shape_height = max(r_off for r_off, c_off in shape_pattern) + 1
@@ -1611,7 +1472,6 @@ class GridCanvas(ttk.Frame):
                         return True
                     placements.pop()
 
-        # 2. 다차원 형태로 실패 시, 1줄 형태를 시도
         for size in priority_sizes:
             for shape_pattern in SHAPE_LIBRARY.get(size, []):
                 shape_height = max(r_off for r_off, c_off in shape_pattern) + 1
@@ -1641,53 +1501,32 @@ class GridCanvas(ttk.Frame):
 
         return False
 
-    # --- [NEW] V10 할당 로직 ---
     def _rd_take_v10(self, need, target_counts, rd_remaining, rds, cursor):
-        """
-        V10: 목표량 기반 순차 할당 + 후-채우기 (Target-Guided Sequential Fill + Fallback)
-        1. 현재 커서부터 순차적으로 RD를 확인하며 아래 조건을 만족하는 첫 RD에 할당:
-           - 실제 남은 용량(rd_remaining) >= need
-           - 남은 목표량(target_counts) > 0
-           - 할당 성공 시 커서는 **그대로** 유지.
-        2. 만약 1번에서 할당할 RD를 찾지 못했다면 (커서~끝까지 확인 후),
-           **처음(인덱스 0)부터 다시** 순회하며 아래 조건을 만족하는 첫 RD에 할당 (후-채우기):
-           - 실제 남은 용량(rd_remaining) >= need (목표량 무시)
-           - 할당 성공 시 커서를 해당 RD 인덱스로 **이동**.
-        3. 1, 2 모두 실패하면 None 반환.
-        """
         n = len(rds)
         if n == 0: return None
         
-        # --- 1. 목표량 기반 순차 할당 시도 (현재 커서부터 끝까지) ---
         current_idx = cursor[0] 
         while current_idx < n:
             current_rd = rds[current_idx]
-            
             can_fit = rd_remaining.get(current_rd, 0) >= need
             below_target = target_counts.get(current_rd, 0) > 0 
-            
             if can_fit and below_target:
                 rd_remaining[current_rd] -= need
                 target_counts[current_rd] = target_counts.get(current_rd, 0) - need 
-                cursor[0] = current_idx # 커서를 현재 위치로 갱신 (다음 RD로 넘어가지 않음)
+                cursor[0] = current_idx
                 return current_rd
-                
-            current_idx += 1 # 다음 RD로 이동
+            current_idx += 1 
             
-        # --- 2. 후-채우기: 목표량 무시하고 물리적으로 가능한 첫 RD에 할당 (처음부터 다시 순회) ---
         for i in range(n): 
             check_idx = i 
             check_rd = rds[check_idx]
             if rd_remaining.get(check_rd, 0) >= need:
                 rd_remaining[check_rd] -= need
                 target_counts[check_rd] = target_counts.get(check_rd, 0) - need 
-                cursor[0] = check_idx # 커서를 할당한 위치로 이동
+                cursor[0] = check_idx
                 return check_rd
                 
-        # --- 3. 후-채우기까지 실패 (정말로 공간 없음) ---
         return None
-    # --- [END NEW] ---
-
 
     def _pick_color(self, cells, b):
         palette = ["#87CEFA","#F6BD60","#F28482","#84A59D","#B8E1DD","#E5989B","#BFD200","#FFBE0B","#9B5DE5"]
@@ -1718,3 +1557,4 @@ class App(tk.Tk):
 if __name__ == '__main__':
     app = App() 
     app.mainloop()
+
