@@ -28,6 +28,12 @@ class Block:
     cell_numbers: Dict[Cell, Union[int, float, str]] = field(default_factory=dict)
     sockets: Set[Cell] = field(default_factory=set)
     gang_counts: Dict[int, int] = field(default_factory=dict)
+    # 엑셀 시트 구분을 위해 추가 (LB/HOLD)
+    is_hold: bool = field(init=False)
+
+    def __post_init__(self):
+        self.is_hold = self.rows >= 6
+
 
 @dataclass
 class SectionHeader:
@@ -191,11 +197,12 @@ def write_excel(
     grid_start_col = info_cols + gap_after_info + deck_cols + gap_after_deck + 1
     grid_right_col = grid_start_col + max_grid_cols - 1
 
-    qty_col = grid_right_col + 3
-    gang_gap_col = qty_col + 1
-    g_start_col = qty_col + 2
+    # Gang 열 위치 조정: Q'ty 옆으로 이동
+    qty_col = grid_right_col + 2 # Q'ty 열 위치 조정
+    # gang_gap_col = qty_col + 1 # 제거
+    g_start_col = qty_col + 1   # Gang 시작 열 (3)
     g_cols = {g: g_start_col + (g - 3) for g in range(3, 10)}
-    g_sum_col = g_start_col + 7
+    g_sum_col = g_start_col + 7 # Gang SUM 열
 
     wb = Workbook()
     ws = wb.active
@@ -211,23 +218,27 @@ def write_excel(
     border_thin  = Border(left=thin, right=thin, top=thin, bottom=thin)
     gray_fill = PatternFill("solid", fgColor="EEEEEE")
 
+    # 열 너비 조정 (Gang 열 이동 고려)
     for c in range(1, g_sum_col + 2): ws.column_dimensions[get_column_letter(c)].width = 4
     for c in range(1, info_cols + 1): ws.column_dimensions[get_column_letter(c)].width = 10
     ws.column_dimensions[get_column_letter(info_cols + 1)].width = 2
     for c in range(info_cols + 2, info_cols + 2 + deck_cols): ws.column_dimensions[get_column_letter(c)].width = 4
     ws.column_dimensions[get_column_letter(info_cols + 2 + deck_cols)].width = 2
+    
+    ws.column_dimensions[get_column_letter(grid_right_col + 1)].width = 2 # Grid와 Q'ty 사이 간격
 
     from openpyxl.utils import get_column_letter as _g
-    ws.column_dimensions[_g(qty_col - 2)].width = 4
-    ws.column_dimensions[_g(qty_col - 1)].width = 5
-    ws.column_dimensions[_g(qty_col)].width     = 4
-    ws.column_dimensions[_g(gang_gap_col)].width= 2
+    # ws.column_dimensions[_g(qty_col - 2)].width = 4 # 불필요
+    # ws.column_dimensions[_g(qty_col - 1)].width = 5 # 불필요
+    ws.column_dimensions[_g(qty_col)].width = 4 # Q'ty 너비
+    # ws.column_dimensions[_g(gang_gap_col)].width= 2 # 제거
     for g in range(3, 10): ws.column_dimensions[_g(g_cols[g])].width = 4
-    ws.column_dimensions[_g(g_sum_col)].width = 7
+    ws.column_dimensions[_g(g_sum_col)].width = 7 # Gang SUM 너비
 
     title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
     try:
         ws.oddHeader.center.text = f"&B&11{title_text}"
+        # GUI에서 Header Right 입력 필드를 제거했으므로, 텍스트는 고정적으로 설정
         ws.oddHeader.right.text  = f"&B&11{(looking_text or 'LOOKING TO FWD')}"
     except Exception:
         pass
@@ -252,6 +263,7 @@ def write_excel(
         ws.cell(row=cur_row, column=cc, value=int(val)).alignment = align_center
         ws.cell(row=cur_row, column=cc).font = Font(size=9, bold=True)
 
+    # Gang 헤더 위치 조정 (Q'ty 옆)
     ws.merge_cells(start_row=cur_row+1, start_column=g_cols[3], end_row=cur_row+1, end_column=g_sum_col)
     gtitle = ws.cell(row=cur_row+1, column=g_cols[3], value="gang별 수량")
     gtitle.alignment = align_center; gtitle.font = Font(size=9, bold=True)
@@ -259,7 +271,9 @@ def write_excel(
         ws.cell(row=cur_row+1, column=c).fill = gray_fill
 
     hrow = cur_row + 2
+    # Q'ty 헤더
     ws.cell(row=hrow, column=qty_col, value="Q'ty").alignment = align_center
+    # Gang 헤더 (3-9, SUM)
     for g in range(3, 10):
         hc = ws.cell(row=hrow, column=g_cols[g], value=g)
         hc.alignment = align_center; hc.fill = gray_fill
@@ -272,12 +286,17 @@ def write_excel(
     vertical_thick_cols = set(thick_column_positions(max_grid_cols))
     last_used_row = cur_row
     grand_qty_ranges = []
-    gang_summary_rows = []
+    
+    # LB/HOLD 구분을 위한 gang_summary_rows 딕셔너리
+    gang_summary_rows = {'LB': [], 'HOLD': []} 
 
     count_left_letter  = get_column_letter(grid_start_col)
     count_right_letter = get_column_letter(grid_start_col + max_grid_cols - 1)
 
-    for it in items:
+    # LB/HOLD 구분을 위한 block 정보 저장 리스트
+    block_info_list = [] 
+
+    for idx, it in enumerate(items):
         if isinstance(it, SectionHeader):
             ws.merge_cells(start_row=cur_row, start_column=grid_start_col, end_row=cur_row, end_column=grid_right_col)
             scell = ws.cell(row=cur_row, column=grid_start_col, value=it.title)
@@ -321,20 +340,27 @@ def write_excel(
                 if (r,c) in b.sockets: cell.border = Border(left=Side(style="thick", color="FF0000"), right=Side(style="thick", color="FF0000"), top=Side(style="thick", color="FF0000"), bottom=Side(style="thick", color="FF0000"))
                 if global_grid_col in vertical_thick_cols: cell.border = Border(left=thick, right=cell.border.right, top=cell.border.top, bottom=cell.border.bottom)
 
+            # Q'ty 및 Gang 열 수식
             ws.cell(row=rr, column=qty_col, value=f"=COUNT({count_left_letter}{rr}:{count_right_letter}{rr})").alignment = align_center
             ws.cell(row=rr, column=qty_col).font = Font(size=8)
-            ws.cell(row=rr, column=gang_gap_col).fill = gray_fill
+            # ws.cell(row=rr, column=gang_gap_col).fill = gray_fill # 제거
             for g in range(3, 10): ws.cell(row=rr, column=g_cols[g]).fill = gray_fill
             ws.cell(row=rr, column=g_sum_col).fill = gray_fill
 
         sum_row = block_end_row + 1
-        gang_summary_rows.append(sum_row)
+        
+        # LB/HOLD 구분하여 summary row 추가
+        block_type = 'HOLD' if b.is_hold else 'LB'
+        gang_summary_rows[block_type].append(sum_row)
+        
+        block_info_list.append({'type': block_type, 'summary_row': sum_row})
+
         qcol_letter = get_column_letter(qty_col)
         total_cell = ws.cell(row=sum_row, column=qty_col, value=f"=SUM({qcol_letter}{block_start_row}:{qcol_letter}{block_end_row})")
         total_cell.alignment = align_center; total_cell.font = Font(size=8, bold=True)
         total_cell.border = Border(top=thick, left=thin, right=thin, bottom=thin)
 
-        ws.cell(row=sum_row, column=gang_gap_col).fill = gray_fill
+        # ws.cell(row=sum_row, column=gang_gap_col).fill = gray_fill # 제거
         terms = []
         for g in range(3, 10):
             cnt = int(b.gang_counts.get(g, 0) or 0)
@@ -349,20 +375,54 @@ def write_excel(
         last_used_row = max(last_used_row, cur_row - 1) # 갱신
 
     grand_row = last_used_row + 2
+    # Grand Total Q'ty
     ws.cell(row=grand_row, column=(qty_col - 1), value="Total").alignment = align_right; ws.cell(row=grand_row, column=(qty_col-1)).font = Font(size=9, bold=True)
     parts = [f"{get_column_letter(qty_col)}{s}:{get_column_letter(qty_col)}{e}" for s, e in grand_qty_ranges]
     grand_qty_cell = ws.cell(row=grand_row, column=qty_col, value=f"=SUM({','.join(parts)})")
     grand_qty_cell.alignment = align_center; grand_qty_cell.font = Font(size=9, bold=True)
     grand_qty_cell.border = Border(top=thick, left=thin, right=thin, bottom=thin)
 
-    gang_total_row = grand_row + 2
-    ws.cell(row=gang_total_row, column=g_cols[3]-2, value="Total Gangs:").alignment = align_right
-    ws.cell(row=gang_total_row, column=g_cols[3]-2).font = Font(bold=True)
-    for g in range(3, 10):
-        col_letter = get_column_letter(g_cols[g])
-        sum_parts = [f"{col_letter}{r}" for r in gang_summary_rows]
-        cell = ws.cell(row=gang_total_row, column=g_cols[g], value=f"=SUM({','.join(sum_parts)})")
-        cell.alignment = align_center; cell.font = Font(bold=True); cell.border = Border(top=thick, bottom=thick)
+    # Grand Total Gang SUM
+    gsum_col_letter = get_column_letter(g_sum_col)
+    all_summary_rows = gang_summary_rows['LB'] + gang_summary_rows['HOLD']
+    gsum_parts = [f"{gsum_col_letter}{r}" for r in all_summary_rows]
+    grand_gsum_cell = ws.cell(row=grand_row, column=g_sum_col, value=f"=SUM({','.join(gsum_parts)})")
+    grand_gsum_cell.alignment = align_center; grand_gsum_cell.font = Font(size=9, bold=True)
+    grand_gsum_cell.border = Border(top=thick, left=thin, right=thin, bottom=thin)
+
+
+    # --- LB / HOLD Gang Totals ---
+    lb_hold_start_row = grand_row + 2
+
+    for i, block_type in enumerate(['LB', 'HOLD']):
+        current_row = lb_hold_start_row + i
+        ws.cell(row=current_row, column=g_cols[3]-2, value=block_type).alignment = align_right
+        ws.cell(row=current_row, column=g_cols[3]-2).font = Font(bold=True)
+        
+        summary_rows_for_type = gang_summary_rows[block_type]
+        
+        for g in range(3, 10):
+            col_letter = get_column_letter(g_cols[g])
+            sum_parts = [f"{col_letter}{r}" for r in summary_rows_for_type]
+            cell = ws.cell(row=current_row, column=g_cols[g], value=f"=SUM({','.join(sum_parts)})")
+            cell.alignment = align_center; cell.font = Font(bold=True); cell.border = Border(top=thick, bottom=thick)
+            
+        # LB/HOLD Gang SUM Total
+        gsum_col_letter = get_column_letter(g_sum_col)
+        sum_parts_gsum = [f"{gsum_col_letter}{r}" for r in summary_rows_for_type]
+        gsum_total_cell = ws.cell(row=current_row, column=g_sum_col, value=f"=SUM({','.join(sum_parts_gsum)})")
+        gsum_total_cell.alignment = align_center; gsum_total_cell.font = Font(bold=True); gsum_total_cell.border = Border(top=thick, bottom=thick)
+
+
+    # Remove Total Gangs row logic
+    # gang_total_row = grand_row + 2
+    # ws.cell(row=gang_total_row, column=g_cols[3]-2, value="Total Gangs:").alignment = align_right
+    # ws.cell(row=gang_total_row, column=g_cols[3]-2).font = Font(bold=True)
+    # for g in range(3, 10):
+    #     col_letter = get_column_letter(g_cols[g])
+    #     sum_parts = [f"{col_letter}{r}" for r in all_summary_rows] # Use all_summary_rows
+    #     cell = ws.cell(row=gang_total_row, column=g_cols[g], value=f"=SUM({','.join(sum_parts)})")
+    #     cell.alignment = align_center; cell.font = Font(bold=True); cell.border = Border(top=thick, bottom=thick)
 
     for gcol in vertical_thick_cols:
         col_idx = grid_start_col + gcol - 1
@@ -437,7 +497,7 @@ def _write_summary_sheet_v5(
     
     thin_side = Side(style="thin", color="000000")
     table_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-    
+   
     small_font = Font(size=9)
 
     # --- 2. 헤더 및 열 너비 설정 ---
@@ -471,7 +531,7 @@ def _write_summary_sheet_v5(
     
     def process_rs_list(rs_list: list, s_row: int, c_offset: int,
                         headers: list, bold_font, header_fill, align_center_wrap, table_border
-                       ) -> Tuple[int, Dict[int, str]]:
+                        ) -> Tuple[int, Dict[int, str]]:
         """
         지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다.
         (다음 시작 행, {RS번호: REF.CON Total 셀 주소}) 딕셔너리 반환
@@ -490,6 +550,17 @@ def _write_summary_sheet_v5(
                 apply_styles(ws.cell(cur_row, c_offset+i), border=table_border)
             ws.cell(cur_row, c_offset, "-")
             cur_row += 1
+            # LGSP 셀 추가
+            ws.merge_cells(start_row=cur_row, start_column=c_offset, end_row=cur_row+2, end_column=c_offset)
+            lgsp_cell = ws.cell(row=cur_row, column=c_offset, value="LGSP")
+            apply_styles(lgsp_cell, align=align_center_wrap, border=table_border)
+            for r_off in range(3): # Apply border to merged area
+                 for i in range(len(headers)): apply_styles(ws.cell(cur_row + r_off, c_offset + i), border=table_border)
+            cur_row += 3
+            # 빈 토탈 행
+            apply_styles(ws.cell(cur_row, c_offset, value="Total"), font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
+            for i in range(1, len(headers)): apply_styles(ws.cell(cur_row, c_offset + i), fill=total_fill, border=table_border)
+            cur_row += 2 # 다음 섹션과의 간격 포함
             return cur_row, rs_totals
 
         for rs in rs_list:
@@ -514,18 +585,19 @@ def _write_summary_sheet_v5(
                 cur_row += 1
                 rs_start_row_for_sum = -1
             else:
+    
                 for rd in rd_list:
                     # c_offset + 2: REF.CON / c_offset + 3: A
                     ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}" 
                     a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}" # D열 또는 L열
-                    
+   
                     apply_styles(ws.cell(cur_row, c_offset), border=table_border)
                     
                     # RD 항목
                     rd_cell = ws.cell(cur_row, c_offset + 1, f"RD-{rd}") 
                     apply_styles(rd_cell, align=align_left_wrap, border=table_border)
                     
-                    # REF. CON 수식
+                    # REF.CON 수식
                     ref_cell = ws.cell(cur_row, c_offset + 2, value=f"=COUNTIF({data_range_str},{rd})")
                     apply_styles(ref_cell, align=align_right, border=table_border, num_format='0')
                     
@@ -560,11 +632,24 @@ def _write_summary_sheet_v5(
                     apply_styles(ws.cell(r, c_offset), border=table_border)
                 rs_start_row_for_sum = rs_start_row
 
-            spare_rows = 3
-            for _ in range(spare_rows):
-                for i in range(len(headers)):
-                    apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
-                cur_row += 1
+            # --- LGSP 셀 추가 ---
+            lgsp_start_row = cur_row
+            lgsp_end_row = lgsp_start_row + 2
+            ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_end_row, end_column=c_offset)
+            lgsp_cell = ws.cell(row=lgsp_start_row, column=c_offset, value="LGSP")
+            apply_styles(lgsp_cell, align=align_center_wrap, border=table_border)
+            # 병합된 영역 나머지 셀에도 테두리 적용
+            for r in range(lgsp_start_row, lgsp_end_row + 1):
+                for i in range(1, len(headers)): # RS 열 제외
+                    apply_styles(ws.cell(r, c_offset + i), border=table_border)
+            cur_row = lgsp_end_row + 1 # cur_row 업데이트
+            # --- LGSP 셀 추가 끝 ---
+
+            # spare_rows = 3 # 제거됨 (LGSP로 대체)
+            # for _ in range(spare_rows):
+            #     for i in range(len(headers)):
+            #         apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
+            #     cur_row += 1
 
             total_label_cell = ws.cell(row=cur_row, column=c_offset, value="Total")
             apply_styles(total_label_cell, font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
@@ -574,7 +659,8 @@ def _write_summary_sheet_v5(
                 ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
                 ref_total_coord = "0"
             else:
-                rs_end_row_for_sum = cur_row - spare_rows - 1
+                # 합계 범위 수정: LGSP 행 제외
+                rs_end_row_for_sum = lgsp_start_row - 1
                 ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
                 a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
                 kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
@@ -591,11 +677,11 @@ def _write_summary_sheet_v5(
             apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border) # BREAKER Total (blank)
             apply_styles(ws.cell(cur_row, c_offset+5), fill=total_fill, border=table_border) # CABLE Total (blank)
             
-            kva_total_cell = ws.cell(cur_row, c_offset + 6, value=kva_sum_formula)
+            kva_total_cell = ws.cell(row=cur_row, column=c_offset + 6, value=kva_sum_formula)
             apply_styles(kva_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
             cur_row += 1
 
-            cur_row += 1
+            cur_row += 1 # 섹션 간 간격
             
         return cur_row, rs_totals 
 
@@ -658,8 +744,9 @@ def _write_summary_sheet_v5(
     ]
     
     table1_row_title_width = 23
+    # 요청된 table1_data_widths 값 반영
     table1_data_widths = [
-        16.25, 23, 13.25, 11.75, 16.5, 14.5, 15.25, 7.25, 11.75, 11.75, 11.75
+        16.25, 23, 13.25, 17, 15.7, 14.5, 15.25, 7.25, 11.75, 11.75, 11.75
     ]
 
     fan_title_row = 1
@@ -685,6 +772,7 @@ def _write_summary_sheet_v5(
         apply_styles(cell, font=current_font, fill=header_fill, align=align_center_wrap, border=table_border)
 
     current_row_for_fan_table = table1_header_row + 1
+    # [START] 기존 행 작성 로직
     for title in table1_row_titles:
         cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col, value=title)
         apply_styles(cell, align=align_left_wrap, border=table_border)
@@ -740,24 +828,46 @@ def _write_summary_sheet_v5(
                 apply_styles(cell, border=table_border)
         
         current_row_for_fan_table += 1
-    fan_table_end_row = current_row_for_fan_table -1
+    # [END] 기존 행 작성 로직
 
+    # 요청에 따라 Reefer section에서 배전되는 Fans 표에 5행 빈칸 추가
+    for _ in range(5):
+        # 첫 번째 (제목) 열
+        cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col)
+        apply_styles(cell, align=align_left_wrap, border=table_border) # 빈칸도 border 적용
+
+        # 나머지 데이터 열
+        for i in range(len(table1_data_headers) - 1): 
+            col_idx = new_table_start_col + 1 + i
+            cell = ws.cell(row=current_row_for_fan_table, column=col_idx)
+            apply_styles(cell, border=table_border)
+
+        current_row_for_fan_table += 1
+
+    fan_table_end_row = current_row_for_fan_table - 1 # fan_table_end_row 갱신
+
+    # Reefer CNTR 계산 테이블을 한 행 위로 이동 (4 -> 3 -> 2로 변경)
+    REEFER_TABLE_ROW_GAP = 2 
+    reefer_title_row = fan_table_end_row + REEFER_TABLE_ROW_GAP
+
+    # SOx Scrubber 열을 제거
     table2_horizontal_headers = [
         "Reefer Section board", "Ref. container(FEU)", "Reefer container(kVA)",
-        "Cargo fan(kVA)", "SOx Scrubber", "Total capacity(kVA)", "TR capacity(kVA)",
+        "Cargo fan(kVA)", "Total capacity(kVA)", "TR capacity(kVA)", # SOx Scrubber 제거됨
         "TR capacity(SPEC)"
     ]
     
+    # 요청된 table2_data_widths 값 반영
+    table2_data_widths = [16.25, 23, 13.25, 17, 16, 15.25] 
+
     table2_vertical_headers = []
     if rs_total > 0:
         for i in range(1, rs_total + 1):
             suffix = "(S)" if i % 2 == 1 else "(P)"
             table2_vertical_headers.append(f"RS-{i} {suffix}")
-            
+    
     table2_vertical_header_width = 23
-    table2_data_widths = [16.25, 23, 13.25, 11.75, 16.5, 14.5, 15.25] 
 
-    reefer_title_row = fan_table_end_row + 2
     table2_header_row = reefer_title_row + 1 
     
     reefer_table_end_col = new_table_start_col + len(table2_horizontal_headers) - 1
@@ -798,16 +908,17 @@ def _write_summary_sheet_v5(
         cargo_fan_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 3)
         apply_styles(cargo_fan_cell, border=table_border, fill=row_fill)
 
-        sox_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 4)
-        apply_styles(sox_cell, border=table_border, fill=row_fill)
-        
-        total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 5, value=f"=SUM({ref_kva_cell.coordinate},{cargo_fan_cell.coordinate},{sox_cell.coordinate})")
+        # Total capacity cell index: new_table_start_col + 4
+        total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 4, 
+                                 value=f"=SUM({ref_kva_cell.coordinate},{cargo_fan_cell.coordinate})") # sox_cell 제거
         apply_styles(total_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
 
-        tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 6)
+        # TR capacity cell index: new_table_start_col + 5
+        tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 5)
         apply_styles(tr_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
     
-        tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 7)
+        # TR spec cell index: new_table_start_col + 6
+        tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 6)
         apply_styles(tr_spec_cell, border=table_border, fill=row_fill)
 
         current_row_for_reefer_table += 1
@@ -840,8 +951,10 @@ def _write_summary_sheet_v5(
         ref_kva_cell = ws.cell(row=r_idx, column=new_table_start_col + 2)
         ref_kva_cell.value = f"={ref_feu_cell_coord}*{tr_k_per_cntr_addr_abs}"
 
-        total_cap_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 5).coordinate
-        tr_cap_cell = ws.cell(row=r_idx, column=new_table_start_col + 6)
+        # Total capacity cell index 변경 반영: new_table_start_col + 5 -> new_table_start_col + 4
+        total_cap_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 4).coordinate 
+        # TR capacity cell index 변경 반영: new_table_start_col + 6 -> new_table_start_col + 5
+        tr_cap_cell = ws.cell(row=r_idx, column=new_table_start_col + 5)
         tr_cap_cell.value = f"=IFERROR({total_cap_cell_coord}/{tr_eff_addr_abs},0)"
 
 
@@ -855,11 +968,21 @@ class GridCanvas(ttk.Frame):
 
         self.rows, self.cols, self.cell_px = 4, 20, 22
         self.cell_colors, self.cell_numbers, self.sockets = {}, {}, set()
-        self.paint_mode = tk.StringVar(value="ADD COLOR")
+        
+        # Mode management (Changed to BooleanVars)
+        # 초기 상태: 아무것도 선택되지 않음
+        self.mode_color = tk.BooleanVar(value=False) 
+        self.mode_number = tk.BooleanVar(value=False)
+        self.mode_eraser = tk.BooleanVar(value=False)
+        self.mode_socket = tk.BooleanVar(value=False)
+
         self.current_label = tk.StringVar(value="1")
-        self.current_color = tk.StringVar(value="#87CEFA")
+        # 요청에 따라 4개의 고정 색상 팔레트 정의
+        self.FIXED_COLORS = ["#FFFF99", "#99CCFF", "#CCFFCC", "#F2DCDB"] 
+        self.current_color = tk.StringVar(value=self.FIXED_COLORS[0])
+        
         self.ship_no = tk.StringVar(value="")
-        self.looking_txt = tk.StringVar(value="LOOKING TO FWD")
+        self.looking_txt = tk.StringVar(value="LOOKING TO FWD") 
         self.rs_count = tk.StringVar(value="0")
         self.rd_per_rs = tk.StringVar(value="0")
         
@@ -867,6 +990,7 @@ class GridCanvas(ttk.Frame):
         self.items: List[Item] = []
         self.editing_index: Optional[int] = None
         self.drag_start, self.drag_rect_id = None, None
+        
         self.drag_start_right, self.drag_rect_id_right = None, None
         self.insert_pos = tk.StringVar(value="1")
         self.undo_stack = []
@@ -879,6 +1003,83 @@ class GridCanvas(ttk.Frame):
         self.draw_all()
         self._recompute_all()
         self._update_insert_spin_range()
+        self._update_ui_visibility() # Initial visibility update
+
+    # 색상 설정 헬퍼 함수 추가
+    def set_current_color(self, hx: str):
+        self.current_color.set(hx)
+        self.color_preview.config(bg=hx)
+
+    # Pick Color 함수 이름 변경 및 수정
+    def pick_color_dialog(self):
+        _, hx = colorchooser.askcolor(color=self.current_color.get(), title="Pick Color")
+        if hx:
+            self.set_current_color(hx)
+
+    def _toggle_mode(self, mode_var: tk.BooleanVar, exclusive: bool, button: ttk.Button):
+        """모드 버튼 클릭에 따라 상태를 전환하고 UI 가시성을 업데이트합니다."""
+        
+        if exclusive:
+            # ERASER 또는 SOCKET (배타적 모드)
+            was_on = mode_var.get()
+            
+            # 모든 모드를 끄기
+            self.mode_color.set(False)
+            self.mode_number.set(False)
+            self.mode_eraser.set(False)
+            self.mode_socket.set(False)
+            
+            # 클릭된 모드만 상태 반전 (토글)
+            mode_var.set(not was_on)
+        else:
+            # COLOR 또는 NUMBER (동시 선택 가능 모드)
+            
+            # 배타적 모드가 켜져 있다면, 해당 모드들을 끄고 현재 모드 상태 토글
+            if self.mode_eraser.get() or self.mode_socket.get():
+                self.mode_eraser.set(False)
+                self.mode_socket.set(False)
+                mode_var.set(True)
+            else:
+                mode_var.set(not mode_var.get())
+
+        # Update all button appearances after any mode change
+        self._update_all_button_appearances()
+        self._update_ui_visibility()
+
+    def _update_button_appearance(self, button: ttk.Button, is_selected: bool):
+        """버튼의 외관을 선택 상태에 따라 변경합니다. (ttk 오류 회피: state 사용)"""
+        if is_selected:
+            # 'pressed' 상태를 사용하여 눌린 것처럼 보이게 함 (다른 상태와 함께 사용 가능)
+            button.state(['pressed']) 
+        else:
+            # 'pressed' 상태 해제
+            button.state(['!pressed'])
+
+
+    def _update_all_button_appearances(self):
+        """모든 모드 버튼의 외관을 현재 상태에 맞게 업데이트합니다."""
+        self._update_button_appearance(self.btn_color, self.mode_color.get())
+        self._update_button_appearance(self.btn_number, self.mode_number.get())
+        self._update_button_appearance(self.btn_eraser, self.mode_eraser.get())
+        self._update_button_appearance(self.btn_socket, self.mode_socket.get())
+
+
+    def _update_ui_visibility(self):
+        """현재 모드 상태에 따라 Number/Color UI의 가시성을 제어합니다."""
+        
+        # Number Frame Visibility
+        if self.mode_number.get():
+            self.number_frame.grid(row=1, column=2, columnspan=2, sticky="ew") # sticky 변경
+        else:
+            self.number_frame.grid_forget()
+
+        # Color Frame Visibility
+        if self.mode_color.get():
+            self.color_frame.grid(row=1, column=4, columnspan=5, sticky="ew") # sticky 변경
+        else:
+            self.color_frame.grid_forget()
+            
+        # Mode Label Text Update Removed
 
     def _create_widgets(self):
         outer = ttk.Frame(self); outer.pack(fill="both", expand=True)
@@ -910,29 +1111,68 @@ class GridCanvas(ttk.Frame):
         # --- [END GUI MOD] ---
 
         top = ttk.Frame(left); top.pack(fill="x", pady=(0, 10))
+        # 컬럼 가중치 설정 (Pick 버튼 잘림 방지)
+        top.columnconfigure(6, weight=1) 
+        
         ttk.Label(top, text="Ship No.").grid(row=0, column=0, sticky="e", padx=4, pady=2)
         ttk.Entry(top, textvariable=self.ship_no, width=14).grid(row=0, column=1, sticky="w", padx=(0,12), pady=2)
-        ttk.Label(top, text="Header Right").grid(row=0, column=2, sticky="e", padx=4, pady=2)
-        ttk.Entry(top, textvariable=self.looking_txt, width=18).grid(row=0, column=3, sticky="w", padx=(0,12), pady=2)
-        ttk.Label(top, text="Mode").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        self.cmb_mode = ttk.Combobox(top, textvariable=self.paint_mode, values=("ADD COLOR", "ADD NUMBER", "ERASER", "SOCKET"), width=12, state="readonly")
-        self.cmb_mode.grid(row=1, column=1, sticky="w", padx=(0,12), pady=2)
-        ttk.Label(top, text="Number").grid(row=1, column=2, sticky="e", padx=4, pady=2)
-        ttk.Entry(top, textvariable=self.current_label, width=10).grid(row=1, column=3, sticky="w", padx=(0,12), pady=2)
-        ttk.Label(top, text="Color").grid(row=1, column=4, sticky="e", padx=4, pady=2)
-        self.color_preview = tk.Label(top, text="   ", bg=self.current_color.get(), relief="groove", width=4)
-        self.color_preview.grid(row=1, column=5, sticky="w", padx=(0,4), pady=2)
-        ttk.Button(top, text="Pick…", command=self.pick_color).grid(row=1, column=6, sticky="w", padx=(2,12), pady=2)
+        
+        
+        # --- Mode Buttons ---
+        mode_btn_frame = ttk.Frame(top)
+        mode_btn_frame.grid(row=0, column=2, columnspan=8, sticky="w", padx=4, pady=2)
+        
+        # Mode Label Removed
 
+        # Buttons creation (store references)
+        self.btn_color = ttk.Button(mode_btn_frame, text="COLOR", 
+                                    command=lambda: self._toggle_mode(self.mode_color, False, self.btn_color))
+        self.btn_color.pack(side="left", padx=2)
+        
+        self.btn_number = ttk.Button(mode_btn_frame, text="NUMBER", 
+                                     command=lambda: self._toggle_mode(self.mode_number, False, self.btn_number))
+        self.btn_number.pack(side="left", padx=2)
+        
+        self.btn_eraser = ttk.Button(mode_btn_frame, text="ERASER", 
+                                     command=lambda: self._toggle_mode(self.mode_eraser, True, self.btn_eraser))
+        self.btn_eraser.pack(side="left", padx=(10, 2))
+        
+        self.btn_socket = ttk.Button(mode_btn_frame, text="SOCKET", 
+                                     command=lambda: self._toggle_mode(self.mode_socket, True, self.btn_socket))
+        self.btn_socket.pack(side="left", padx=2)
+
+        # Initial appearance setup using state
+        self._update_all_button_appearances()
+        
+        # --- Color / Number Inputs (Visibility controlled) ---
+        
+        # Number Frame (Grid location is placeholder, controlled by _update_ui_visibility)
+        self.number_frame = ttk.Frame(top)
+        ttk.Label(self.number_frame, text="Number").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        ttk.Entry(self.number_frame, textvariable=self.current_label, width=10).grid(row=0, column=1, sticky="w", padx=(0,12), pady=2)
+        
+        # Color Frame (Grid location is placeholder, controlled by _update_ui_visibility)
+        self.color_frame = ttk.Frame(top)
+        ttk.Label(self.color_frame, text="Color").grid(row=0, column=0, sticky="e", padx=4, pady=2)
+        
+        color_col_start = 1
+        for i, color in enumerate(self.FIXED_COLORS):
+            btn = tk.Button(self.color_frame, text=" ", bg=color, width=2, relief="raised", 
+                            command=lambda c=color: self.set_current_color(c))
+            btn.grid(row=0, column=color_col_start + i, sticky="w", padx=(1, 1), pady=2)
+            
+        self.color_preview = tk.Label(self.color_frame, text="   ", bg=self.current_color.get(), relief="groove", width=4)
+        self.color_preview.grid(row=0, column=color_col_start + len(self.FIXED_COLORS), sticky="w", padx=(0,4), pady=2)
+        ttk.Button(self.color_frame, text="Pick…", command=self.pick_color_dialog).grid(row=0, column=color_col_start + len(self.FIXED_COLORS) + 1, sticky="w", padx=(2,12), pady=2)
+
+        # Main Button Row
         btn_row = ttk.Frame(left); btn_row.pack(fill="x", pady=5)
         ttk.Button(btn_row, text="Import…", command=self.import_from_excel).grid(row=0, column=0, padx=2, pady=2)
-        ttk.Button(btn_row, text="Edit", command=self.edit_selected).grid(row=0, column=1, padx=2, pady=2)
-        ttk.Button(btn_row, text="Save", command=self.save_edits).grid(row=0, column=2, padx=2, pady=2)
-        ttk.Button(btn_row, text="Delete", command=self.delete_selected).grid(row=0, column=3, padx=2, pady=2)
-        ttk.Button(btn_row, text="Auto Set", command=self.auto_set_groups).grid(row=0, column=4, padx=(12,2), pady=2)
-        ttk.Button(btn_row, text="Undo", command=self.undo).grid(row=0, column=5, padx=2, pady=2)
-        ttk.Button(btn_row, text="Clear All", command=self.clear_all).grid(row=0, column=6, padx=2, pady=2)
-        ttk.Button(btn_row, text="Export…", command=self.export_excel).grid(row=0, column=7, padx=(12,2), pady=2)
+        ttk.Button(btn_row, text="Save", command=self.save_edits).grid(row=0, column=1, padx=2, pady=2)
+        ttk.Button(btn_row, text="Auto Set", command=self.auto_set_groups).grid(row=0, column=2, padx=(12,2), pady=2)
+        ttk.Button(btn_row, text="Undo", command=self.undo).grid(row=0, column=3, padx=2, pady=2)
+        ttk.Button(btn_row, text="Clear All", command=self.clear_all).grid(row=0, column=4, padx=2, pady=2)
+        ttk.Button(btn_row, text="Export…", command=self.export_excel).grid(row=0, column=5, padx=(12,2), pady=2)
 
         self.canvas = tk.Canvas(left, bg="white", highlightthickness=1, highlightbackground="#cccccc")
         self.canvas.pack(fill="both", expand=True, pady=5)
@@ -952,7 +1192,14 @@ class GridCanvas(ttk.Frame):
         ttk.Label(bottom, text="Items (Blocks / Sections)").pack(anchor="w")
         self.items_list = tk.Listbox(bottom, height=8); self.items_list.pack(fill="x", expand=True)
         self.items_list.bind("<Double-Button-1>", lambda e: self.edit_selected())
-
+        self.items_list.bind("<Button-3>", self._show_context_menu)
+        
+        self.context_menu = tk.Menu(self.items_list, tearoff=0)
+        self.context_menu.add_command(label="Delete Block", command=lambda: self.context_menu_action("DELETE"))
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Insert ACCOMMODATION", command=lambda: self.context_menu_action("INSERT_ACCOMMODATION"))
+        self.context_menu.add_command(label="Insert E/R CASING", command=lambda: self.context_menu_action("INSERT_E/R CASING"))
+        
         meta = ttk.LabelFrame(left, text="Block Meta", padding=10)
         meta.pack(fill="x", pady=5)
         self.meta_label_type = tk.StringVar(value="Hatch No")
@@ -968,14 +1215,6 @@ class GridCanvas(ttk.Frame):
         self.meta_deck = tk.StringVar(value="")
         ttk.Entry(meta, textvariable=self.meta_deck, width=12).grid(row=1, column=3, sticky="w", padx=4, pady=2)
         ttk.Button(meta, text="Apply to Selected", command=self.apply_meta_to_selected).grid(row=0, column=4, rowspan=2, sticky="nsw", padx=(12,4), pady=2)
-
-        sec = ttk.LabelFrame(left, text="Insert Section", padding=10)
-        sec.pack(fill="x", pady=5)
-        ttk.Label(sec, text="삽입 위치(1-기준)").grid(row=0, column=0, sticky="e", padx=4, pady=2)
-        self.pos_spin = ttk.Spinbox(sec, from_=1, to=1, textvariable=self.insert_pos, width=6)
-        self.pos_spin.grid(row=0, column=1, sticky="w", padx=4, pady=2)
-        ttk.Button(sec, text="Insert ACCOMMODATION", command=lambda: self.insert_section_at("ACCOMMODATION")).grid(row=0, column=2, padx=(12,4), pady=2)
-        ttk.Button(sec, text="Insert E/R CASING", command=lambda: self.insert_section_at("E/R CASING")).grid(row=0, column=3, padx=4, pady=2)
 
     def _save_state_for_undo(self):
         state = {
@@ -996,6 +1235,11 @@ class GridCanvas(ttk.Frame):
         self.items = state['items']
         self.editing_index = state['editing_index']
         self.cell_colors, self.cell_numbers, self.sockets = state['canvas_data']
+        
+        # 모드 상태 초기화 (필수) - 초기값은 아무것도 선택 안 함으로 변경
+        self.mode_color.set(False); self.mode_number.set(False); self.mode_eraser.set(False); self.mode_socket.set(False)
+        self._update_all_button_appearances() # Update button appearances
+        self._update_ui_visibility()
 
         if self.editing_index is not None:
             self.edit_selected()
@@ -1040,12 +1284,6 @@ class GridCanvas(ttk.Frame):
             txt_widget.insert(tk.END, content)
             txt_widget.config(state="disabled")
 
-    def pick_color(self):
-        _, hx = colorchooser.askcolor(color=self.current_color.get(), title="Pick Color")
-        if hx:
-            self.current_color.set(hx)
-            self.color_preview.config(bg=hx)
-
     def clear_canvas(self):
         self.cell_colors.clear(); self.cell_numbers.clear(); self.sockets.clear()
         self.draw_all()
@@ -1088,14 +1326,30 @@ class GridCanvas(ttk.Frame):
         end_cell = self.xy_to_cell(e.x, e.y) or self.drag_start
         r1, c1 = self.drag_start
         r2, c2 = end_cell
-        mode = self.paint_mode.get()
+        
+        # Update logic based on BooleanVars
+        is_color = self.mode_color.get()
+        is_number = self.mode_number.get()
+        is_eraser = self.mode_eraser.get()
+        is_socket = self.mode_socket.get()
+        
         for r in range(min(r1, r2), max(r1, r2) + 1):
             for c in range(min(c1, c2), max(c1, c2) + 1):
                 pos = (r, c)
-                if mode == "ADD COLOR": self.cell_colors[pos] = self.current_color.get()
-                elif mode == "ADD NUMBER": self.cell_numbers[pos] = parse_number_like(self.current_label.get())
-                elif mode == "ERASER": self.cell_colors.pop(pos, None); self.cell_numbers.pop(pos, None); self.sockets.discard(pos)
-                elif mode == "SOCKET": self.sockets.add(pos)
+                
+                if is_eraser: 
+                    self.cell_colors.pop(pos, None); self.cell_numbers.pop(pos, None); self.sockets.discard(pos)
+                elif is_socket:
+                    self.sockets.add(pos)
+                
+                # Color and Number can be set simultaneously
+                # Apply only if not in eraser or socket mode
+                elif is_color or is_number:
+                    if is_color: 
+                        self.cell_colors[pos] = self.current_color.get()
+                    if is_number: 
+                        self.cell_numbers[pos] = parse_number_like(self.current_label.get())
+        
         self.drag_start = None
         self.draw_all()
         self._recompute_all()
@@ -1116,13 +1370,21 @@ class GridCanvas(ttk.Frame):
         end_cell = self.xy_to_cell(e.x, e.y) or self.drag_start_right
         r1, c1 = self.drag_start_right
         r2, c2 = end_cell
+        
+        # Right click behavior is defined as clearing/erasing (pop/discard) based on selected mode.
+        is_color = self.mode_color.get()
+        is_number = self.mode_number.get()
+        is_socket = self.mode_socket.get()
+        # Eraser doesn't need a special right-click action, it erases on left click.
+        
         for r in range(min(r1, r2), max(r1, r2) + 1):
             for c in range(min(c1, c2), max(c1, c2) + 1):
                 pos = (r, c)
-                mode = self.paint_mode.get()
-                if mode == "ADD COLOR": self.cell_colors.pop(pos, None)
-                elif mode == "ADD NUMBER": self.cell_numbers.pop(pos, None)
-                elif mode == "SOCKET": self.sockets.discard(pos)
+                # Right-click removes properties associated with active non-exclusive modes
+                if is_color: self.cell_colors.pop(pos, None)
+                if is_number: self.cell_numbers.pop(pos, None)
+                if is_socket: self.sockets.discard(pos) # Remove socket on right-click if socket mode is active
+                
         self.drag_start_right = None
         self.draw_all()
         self._recompute_all()
@@ -1152,11 +1414,10 @@ class GridCanvas(ttk.Frame):
         self._update_insert_spin_range()
         self._recompute_all()
 
+    # Insert Section GUI가 제거되었으므로, 관련 함수는 내부 로직으로만 사용됨
     def _update_insert_spin_range(self):
         total = len(self.items) + 1
-        self.pos_spin.config(to=total)
-        sel = self.items_list.curselection()
-        self.insert_pos.set(str(sel[0] + 1 if sel else total))
+        # self.pos_spin.config(to=total) # Spinbox 제거됨
 
     def item_label(self, it, idx):
         if isinstance(it, SectionHeader): return f"[Section] {it.title}"
@@ -1195,6 +1456,7 @@ class GridCanvas(ttk.Frame):
 
     def save_edits(self):
         self._save_state_for_undo()
+    
         if self.editing_index is None: return
         b: Block = self.items[self.editing_index]
         b.cell_colors, b.cell_numbers, b.sockets = dict(self.cell_colors), dict(self.cell_numbers), set(self.sockets)
@@ -1204,12 +1466,46 @@ class GridCanvas(ttk.Frame):
         self.winfo_toplevel().title("Reefer Layout")
         messagebox.showinfo("Saved", "블럭 수정이 저장되었습니다.")
 
-    def delete_selected(self):
+    # 우클릭 메뉴 이벤트 핸들러 추가
+    def _show_context_menu(self, event):
+        # 마우스 위치의 항목을 선택
+        try:
+            index = self.items_list.nearest(event.y)
+            if index is not None:
+                self.items_list.selection_clear(0, tk.END)
+                self.items_list.selection_set(index)
+                # 메뉴 표시
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    # 우클릭 메뉴 액션 핸들러 추가 (삭제 및 삽입 통합)
+    def context_menu_action(self, action: str):
         sel = self.items_list.curselection()
-        if sel and messagebox.askyesno("Confirm", "정말로 선택한 아이템을 삭제하시겠습니까?"):
-            self._save_state_for_undo()
-            del self.items[sel[0]]
-            self.refresh_list()
+        if not sel: 
+            if action.startswith("INSERT_"):
+                # 아무것도 선택되지 않았을 경우, 맨 마지막에 삽입
+                self.insert_section_at(action.replace("INSERT_", ""), pos=len(self.items))
+            return
+            
+        idx = sel[0]
+        
+        if action == "DELETE":
+            # 삭제 로직 (Delete Block)
+            it = self.items[idx]
+            if isinstance(it, SectionHeader):
+                 confirm_msg = f"정말로 선택한 섹션({it.title})를 삭제하시겠습니까?"
+            else:
+                 confirm_msg = "정말로 선택한 블럭을 삭제하시겠습니까?"
+
+            if messagebox.askyesno("Confirm", confirm_msg):
+                self._save_state_for_undo()
+                del self.items[idx]
+                self.refresh_list()
+        elif action.startswith("INSERT_"):
+            # 삽입 로직 (선택된 항목의 바로 다음 위치에 삽입)
+            self.insert_section_at(action.replace("INSERT_", ""), pos=idx + 1)
+            
 
     def apply_meta_to_selected(self):
         sel = self.items_list.curselection()
@@ -1221,11 +1517,16 @@ class GridCanvas(ttk.Frame):
         b.bay, b.deck = self.meta_bay.get(), self.meta_deck.get()
         self.refresh_list()
 
-    def insert_section_at(self, title):
+    # Insert Section GUI 제거로 pos 파라미터를 추가하여 우클릭 메뉴에서 사용하도록 수정
+    def insert_section_at(self, title: str, pos: Optional[int] = None):
         self._save_state_for_undo()
-        try: pos = int(self.insert_pos.get()) - 1
-        except (ValueError, TypeError): pos = len(self.items)
-        self.items.insert(pos, SectionHeader(title=title))
+        if pos is None:
+            # GUI가 제거되었으므로 이 경로는 사용되지 않지만, 기존 코드 호환을 위해 남김
+            try: pos = int(self.insert_pos.get()) - 1
+            except (ValueError, TypeError): pos = len(self.items)
+        
+        insert_idx = min(max(0, pos), len(self.items))
+        self.items.insert(insert_idx, SectionHeader(title=title))
         self.refresh_list()
 
     def import_from_excel(self):
@@ -1240,6 +1541,9 @@ class GridCanvas(ttk.Frame):
             return
 
         added, skipped = 0, 0
+        # 요청에 따라 Import 시 기본 색상을 회색으로 복원
+        default_fill_color = "#EEEEEE" 
+        
         for row in ws.iter_rows(min_row=1, values_only=True):
             if not row or len(row) < 2 or row[0] is None or row[1] is None: continue
             try:
@@ -1255,7 +1559,7 @@ class GridCanvas(ttk.Frame):
                     
                 for r_idx, cnt in enumerate(values, 1):
                     start_c = 1 + (cols - cnt) // 2
-                    for k in range(cnt): b.cell_colors[(r_idx, start_c + k)] = "#EEEEEE"
+                    for k in range(cnt): b.cell_colors[(r_idx, start_c + k)] = default_fill_color
                 self.items.append(b)
                 added += 1
             except:
@@ -1415,6 +1719,7 @@ class GridCanvas(ttk.Frame):
                 if rem_len == 0: return []
                 if rem_len < 4 : return None
                 if rem_len in memo: return memo[rem_len]
+    
                 for size in sizes:
                     if size <= rem_len:
                         res = find(rem_len - size)
@@ -1436,6 +1741,7 @@ class GridCanvas(ttk.Frame):
                     spans.append((start, cols_in_row[i-1]))
                     start = cols_in_row[i]
             spans.append((start, cols_in_row[-1]))
+            
             for start_col, end_col in spans:
                 span_len = end_col - start_col + 1
                 pieces = partition(span_len)
@@ -1529,7 +1835,9 @@ class GridCanvas(ttk.Frame):
         return None
 
     def _pick_color(self, cells, b):
-        palette = ["#87CEFA","#F6BD60","#F28482","#84A59D","#B8E1DD","#E5989B","#BFD200","#FFBE0B","#9B5DE5"]
+        # 요청에 따라 사용자가 지정한 4가지 색상만 사용하도록 수정
+        palette = self.FIXED_COLORS 
+        
         adj_colors = set()
         for r, c in cells:
             for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]: 
@@ -1537,10 +1845,13 @@ class GridCanvas(ttk.Frame):
                 if adj_cell in b.cell_colors: 
                     adj_colors.add(b.cell_colors[adj_cell]) 
         
+        # 인접 셀과 다른 색상 중 첫 번째를 선택
         for color in palette:
             if color not in adj_colors:
                 return color
-        return random.choice(palette)
+        
+        # 만약 4가지 색상 모두 인접해 있다면, 지정된 색상 중 첫 번째 색상을 반환 (fallback)
+        return palette[0]
 
 
 class App(tk.Tk):
@@ -1557,4 +1868,3 @@ class App(tk.Tk):
 if __name__ == '__main__':
     app = App() 
     app.mainloop()
-
