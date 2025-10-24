@@ -223,7 +223,7 @@ def write_excel(
     ws.column_dimensions[_g(qty_col)].width     = 4
     ws.column_dimensions[_g(gang_gap_col)].width= 2
     for g in range(3, 10): ws.column_dimensions[_g(g_cols[g])].width = 4
-    ws.column_dimensions[_g(g_sum_col)].width    = 7
+    ws.column_dimensions[_g(g_sum_col)].width = 7
 
     title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
     try:
@@ -377,11 +377,17 @@ def write_excel(
         try: rpr = int(rd_per_rs_str or 0)
         except ValueError: rpr = 0
             
+        # --- [BUG FIX: Sheet Name ' 처리] ---
+        # 엑셀 수식에서 시트 이름에 ' (작은따옴표)가 포함된 경우
+        # (예: 'My'Ship') 오류가 발생하지 않도록 '' (따옴표 두 개)로 이스케이프합니다.
+        sheet_name_for_formula = sheet_name.replace("'", "''")
+        
         data_range_str = (
-            f"'{sheet_name}'!"
+            f"'{sheet_name_for_formula}'!" # 수정된 시트 이름 사용
             f"{get_column_letter(grid_start_col)}{data_start_row}:"
             f"{get_column_letter(grid_right_col)}{last_used_row}"
         )
+        # --- [END BUG FIX] ---
             
         summary_ws = wb.create_sheet(title="Summary")
         
@@ -525,29 +531,42 @@ def _write_summary_sheet_v5(
                 rs_start_row_for_sum = -1
             else:
                 for rd in rd_list:
-                    ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}"
-                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}"
+                    # c_offset + 2: REF.CON / c_offset + 3: A (D열 또는 L열)
+                    ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}" 
+                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}" # D열 또는 L열 참조
+                    
                     apply_styles(ws.cell(cur_row, c_offset), border=table_border)
                     
-                    # RD 항목 앞 공백 제거
+                    # RD 항목
                     rd_cell = ws.cell(cur_row, c_offset + 1, f"RD-{rd}") 
-                    
                     apply_styles(rd_cell, align=align_left_wrap, border=table_border)
+                    
+                    # REF. CON 수식
                     ref_cell = ws.cell(cur_row, c_offset + 2, value=f"=COUNTIF({data_range_str},{rd})")
                     apply_styles(ref_cell, align=align_right, border=table_border, num_format='0')
+                    
+                    # A 수식
                     a_cell = ws.cell(cur_row, c_offset + 3, value=f"={ref_con_cell_addr}*17.4*0.9")
                     apply_styles(a_cell, align=align_right, border=table_border, num_format='0.00')
+                    
+                    # BREAKER 수식
                     breaker_cell = ws.cell(cur_row, c_offset + 4, value=f'=IF({a_cell_addr}>=800,"1250/900",IF({a_cell_addr}>=700,"800/800","800/700"))')
                     apply_styles(breaker_cell, align=align_center_wrap, border=table_border)
                     
-                    cable_cell = ws.cell(cur_row, c_offset + 5) # CABLE 셀
-                    apply_styles(cable_cell, border=table_border)
                     
-                    kva_cell = ws.cell(cur_row, c_offset + 6, value=f"={ref_con_cell_addr}*10.6") # KVA 셀 (5->6)
+                    # --- [CABLE 수식 삭제 및 빈칸 유지] ---
+                    cable_cell = ws.cell(cur_row, c_offset + 5) # F열 또는 N열
+                    cable_cell.value = "" # 수식 삭제, 빈 값으로 설정
+                    apply_styles(cable_cell, border=table_border, align=align_center_wrap) # 기본 스타일 적용
+                    # --- [CABLE 수식 삭제 완료] ---
+                    
+                    # KVA 수식
+                    kva_cell = ws.cell(cur_row, c_offset + 6, value=f"={ref_con_cell_addr}*10.6") 
                     apply_styles(kva_cell, align=align_right, border=table_border, num_format='0.00')
                     cur_row += 1
 
                 rs_end_row = cur_row - 1
+                # RS 셀 병합 및 스타일 적용 (반복문 바깥)
                 ws.merge_cells(start_row=rs_start_row, start_column=c_offset, end_row=rs_end_row, end_column=c_offset)
                 rs_cell = ws.cell(rs_start_row, c_offset, f"RS-{rs}")
                 apply_styles(rs_cell, font=bold_font, align=align_center_wrap, border=table_border)
@@ -695,6 +714,7 @@ def _write_summary_sheet_v5(
     # 2. 나머지 데이터 열 너비 설정
     set_column_widths(new_table_start_col + 1, table1_data_widths)
 
+    
     # 3. 데이터 열 헤더(가로 제목) 쓰기
     for i, header in enumerate(table1_data_headers):
         col_idx = new_table_start_col + i
