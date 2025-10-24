@@ -1405,7 +1405,7 @@ class GridCanvas(ttk.Frame):
         if self.editing_index is not None: self.edit_selected() 
         self.refresh_list() 
         self._recompute_all() 
-        messagebox.showinfo("Auto Set", "자동 배치 완료 (V10: 목표량+후-채우기 적용)")
+        messagebox.showinfo("Auto Set", "자동 배치 완료")
 
     def _solve_line_tiling(self, b: Block, side_active: Set[Cell], side: str, placements: List[Dict]) -> bool:
         def partition(length: int) -> Optional[List[int]]:
