@@ -9,7 +9,7 @@ import copy
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.cell import Cell
+from openpyxl.cell import Cell # Excel 수식 입력을 위해 추가
 
 # --------------------------------
 # Types & Models
@@ -235,6 +235,7 @@ def write_excel(
     title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
     try:
         ws.oddHeader.center.text = f"&B&11{title_text}"
+        # GUI에서 Header Right 입력 필드를 제거했으므로, 텍스트는 고정적으로 설정
         ws.oddHeader.right.text  = f"&B&11{(looking_text or 'LOOKING TO FWD')}"
     except Exception:
         pass
@@ -407,7 +408,7 @@ def write_excel(
         gsum_col_letter = get_column_letter(g_sum_col)
         sum_parts_gsum = [f"{gsum_col_letter}{r}" for r in summary_rows_for_type] if summary_rows_for_type else ["0"]
         gsum_total_cell = ws.cell(row=current_row, column=g_sum_col, value=f"=SUM({','.join(sum_parts_gsum)})")
-        gsum_total_cell.alignment = align_center; gsum_total_cell.font = Font(size=9, bold=True); gsum_total_cell.border = Border(top=thick, bottom=thick)
+        gsum_total_cell.alignment = align_center; gsum_total_cell.font = Font(bold=True); gsum_total_cell.border = Border(top=thick, bottom=thick)
 
 
     for gcol in vertical_thick_cols:
@@ -447,7 +448,7 @@ def write_excel(
     wb.save(filename)
 
 # --------------------------------
-# Summary Sheet Writer
+# Summary Sheet Writer (V5 - Merged RS, No Grand Total, Smaller Font)
 # --------------------------------
 def _write_summary_sheet_v5(
     ws,
@@ -642,13 +643,6 @@ def _write_summary_sheet_v5(
             if rs_start_row_for_sum == -1:
                 ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
                 ref_total_coord = "0"
-            else:
-                # 합계 범위 수정: LGSP 행 제외
-                rs_end_row_for_sum = lgsp_start_row - 1
-                ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
-                a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
-                kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
-                ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}"
 
             ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
             apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
@@ -736,7 +730,7 @@ def _write_summary_sheet_v5(
     ]
     
     # 요청된 새로운 너비 적용 (Q열부터 AE열까지, 총 15개 열)
-    new_table1_data_widths = [22.5, 11.5, 11.5, 22.5, 11.5, 11.5, 11.5, 11.5, 11.5, 8, 6, 6, 10.5, 10.5, 10.5]
+    new_table1_data_widths = [23, 12, 12, 23, 12, 12, 10.5, 10.5, 10.5, 8, 6, 6, 10.5, 10.5, 10.5]
 
     fan_title_row = 1
     fan_table_end_col = fan_table_start_col + len(new_table1_data_widths) - 1 # 열 개수 변경 반영
@@ -876,18 +870,18 @@ def _write_summary_sheet_v5(
 
     fan_table_end_row = current_row_for_fan_table - 1
 
-    # Reefer CNTR 계산 테이블 위치
-    REEFER_TABLE_ROW_GAP = 2 
+    # Reefer CNTR 계산 테이블 위치 조정 (한 행 더 내림)
+    REEFER_TABLE_ROW_GAP = 2 # 1 -> 2
     reefer_title_row = fan_table_end_row + REEFER_TABLE_ROW_GAP
 
-    # Reefer CNTR 테이블 헤더 및 너비
+    # Reefer CNTR 테이블 헤더 및 너비 (이전 요청 반영)
     table2_horizontal_headers = [
-        "Reefer Section board", "Ref. container (FEU)", "Reefer container (kVA)",
+        "Reefer Section board", "Ref. container (FEU)", "Ref. container (kVA)",
         "Cargo fan(kVA)", "Total capacity (kVA)", "TR capacity (kVA)", 
         "TR capacity (SPEC)"
     ]
     # 요청된 table2_data_widths 값 반영
-    table2_data_widths = [11.5, 11.5, 22.5, 11.5, 10.5, 10.5] 
+    table2_data_widths = [12, 12, 23, 12, 10.5, 10.5] 
 
     table2_vertical_headers = []
     if rs_total > 0:
@@ -895,7 +889,7 @@ def _write_summary_sheet_v5(
             suffix = "(S)" if i % 2 == 1 else "(P)"
             table2_vertical_headers.append(f"RS-{i} {suffix}")
     
-    table2_vertical_header_width = 22.5
+    table2_vertical_header_width = 23
 
     table2_header_row = reefer_title_row + 1 
     
@@ -1909,4 +1903,3 @@ class App(tk.Tk):
 if __name__ == '__main__':
     app = App() 
     app.mainloop()
-
