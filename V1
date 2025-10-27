@@ -643,6 +643,13 @@ def _write_summary_sheet_v5(
             if rs_start_row_for_sum == -1:
                 ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
                 ref_total_coord = "0"
+            else:
+                # 합계 범위 수정: LGSP 행 제외
+                rs_end_row_for_sum = lgsp_start_row - 1
+                ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
+                a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
+                kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
+                ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}"
 
             ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
             apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
