@@ -9,7 +9,7 @@ import copy
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Alignment, Border, Side, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.cell import Cell # Excel 수식 입력을 위해 추가
+from openpyxl.cell import Cell
 
 # --------------------------------
 # Types & Models
@@ -228,17 +228,13 @@ def write_excel(
     ws.column_dimensions[get_column_letter(grid_right_col + 1)].width = 2 # Grid와 Q'ty 사이 간격
 
     from openpyxl.utils import get_column_letter as _g
-    # ws.column_dimensions[_g(qty_col - 2)].width = 4 # 불필요
-    # ws.column_dimensions[_g(qty_col - 1)].width = 5 # 불필요
     ws.column_dimensions[_g(qty_col)].width = 4 # Q'ty 너비
-    # ws.column_dimensions[_g(gang_gap_col)].width= 2 # 제거
     for g in range(3, 10): ws.column_dimensions[_g(g_cols[g])].width = 4
     ws.column_dimensions[_g(g_sum_col)].width = 7 # Gang SUM 너비
 
     title_text = (ship_no.strip() + " Reefer Arrangement") if ship_no.strip() else "Reefer Arrangement"
     try:
         ws.oddHeader.center.text = f"&B&11{title_text}"
-        # GUI에서 Header Right 입력 필드를 제거했으므로, 텍스트는 고정적으로 설정
         ws.oddHeader.right.text  = f"&B&11{(looking_text or 'LOOKING TO FWD')}"
     except Exception:
         pass
@@ -334,6 +330,7 @@ def write_excel(
                 cc = grid_start_col + global_grid_col - 1
                 cell = ws.cell(row=rr, column=cc)
                 cell.alignment = align_center
+                # Block의 cell_colors에 저장된 색상을 사용 (Auto Set/Import에서 지정된 색상)
                 if (r,c) in b.cell_colors: cell.fill = PatternFill("solid", fgColor=b.cell_colors[(r,c)].lstrip("#"))
                 cell.border = border_thin
                 if (r,c) in b.cell_numbers: cell.value = parse_number_like(b.cell_numbers[(r,c)])
@@ -343,7 +340,7 @@ def write_excel(
             # Q'ty 및 Gang 열 수식
             ws.cell(row=rr, column=qty_col, value=f"=COUNT({count_left_letter}{rr}:{count_right_letter}{rr})").alignment = align_center
             ws.cell(row=rr, column=qty_col).font = Font(size=8)
-            # ws.cell(row=rr, column=gang_gap_col).fill = gray_fill # 제거
+            # Gang 열 회색 배경
             for g in range(3, 10): ws.cell(row=rr, column=g_cols[g]).fill = gray_fill
             ws.cell(row=rr, column=g_sum_col).fill = gray_fill
 
@@ -360,7 +357,6 @@ def write_excel(
         total_cell.alignment = align_center; total_cell.font = Font(size=8, bold=True)
         total_cell.border = Border(top=thick, left=thin, right=thin, bottom=thin)
 
-        # ws.cell(row=sum_row, column=gang_gap_col).fill = gray_fill # 제거
         terms = []
         for g in range(3, 10):
             cnt = int(b.gang_counts.get(g, 0) or 0)
@@ -385,7 +381,7 @@ def write_excel(
     # Grand Total Gang SUM
     gsum_col_letter = get_column_letter(g_sum_col)
     all_summary_rows = gang_summary_rows['LB'] + gang_summary_rows['HOLD']
-    gsum_parts = [f"{gsum_col_letter}{r}" for r in all_summary_rows]
+    gsum_parts = [f"{gsum_col_letter}{r}" for r in all_summary_rows] if all_summary_rows else ["0"]
     grand_gsum_cell = ws.cell(row=grand_row, column=g_sum_col, value=f"=SUM({','.join(gsum_parts)})")
     grand_gsum_cell.alignment = align_center; grand_gsum_cell.font = Font(size=9, bold=True)
     grand_gsum_cell.border = Border(top=thick, left=thin, right=thin, bottom=thin)
@@ -396,33 +392,23 @@ def write_excel(
 
     for i, block_type in enumerate(['LB', 'HOLD']):
         current_row = lb_hold_start_row + i
-        ws.cell(row=current_row, column=g_cols[3]-2, value=block_type).alignment = align_right
-        ws.cell(row=current_row, column=g_cols[3]-2).font = Font(bold=True)
+        ws.cell(row=current_row, column=qty_col, value=block_type).alignment = align_right # Q'ty 열에 LB/HOLD 표시
+        ws.cell(row=current_row, column=qty_col).font = Font(bold=True)
         
         summary_rows_for_type = gang_summary_rows[block_type]
         
         for g in range(3, 10):
             col_letter = get_column_letter(g_cols[g])
-            sum_parts = [f"{col_letter}{r}" for r in summary_rows_for_type]
+            sum_parts = [f"{col_letter}{r}" for r in summary_rows_for_type] if summary_rows_for_type else ["0"]
             cell = ws.cell(row=current_row, column=g_cols[g], value=f"=SUM({','.join(sum_parts)})")
             cell.alignment = align_center; cell.font = Font(bold=True); cell.border = Border(top=thick, bottom=thick)
             
         # LB/HOLD Gang SUM Total
         gsum_col_letter = get_column_letter(g_sum_col)
-        sum_parts_gsum = [f"{gsum_col_letter}{r}" for r in summary_rows_for_type]
+        sum_parts_gsum = [f"{gsum_col_letter}{r}" for r in summary_rows_for_type] if summary_rows_for_type else ["0"]
         gsum_total_cell = ws.cell(row=current_row, column=g_sum_col, value=f"=SUM({','.join(sum_parts_gsum)})")
-        gsum_total_cell.alignment = align_center; gsum_total_cell.font = Font(bold=True); gsum_total_cell.border = Border(top=thick, bottom=thick)
+        gsum_total_cell.alignment = align_center; gsum_total_cell.font = Font(size=9, bold=True); gsum_total_cell.border = Border(top=thick, bottom=thick)
 
-
-    # Remove Total Gangs row logic
-    # gang_total_row = grand_row + 2
-    # ws.cell(row=gang_total_row, column=g_cols[3]-2, value="Total Gangs:").alignment = align_right
-    # ws.cell(row=gang_total_row, column=g_cols[3]-2).font = Font(bold=True)
-    # for g in range(3, 10):
-    #     col_letter = get_column_letter(g_cols[g])
-    #     sum_parts = [f"{col_letter}{r}" for r in all_summary_rows] # Use all_summary_rows
-    #     cell = ws.cell(row=gang_total_row, column=g_cols[g], value=f"=SUM({','.join(sum_parts)})")
-    #     cell.alignment = align_center; cell.font = Font(bold=True); cell.border = Border(top=thick, bottom=thick)
 
     for gcol in vertical_thick_cols:
         col_idx = grid_start_col + gcol - 1
@@ -461,7 +447,7 @@ def write_excel(
     wb.save(filename)
 
 # --------------------------------
-# Summary Sheet Writer (V5 - Merged RS, No Grand Total, Smaller Font)
+# Summary Sheet Writer
 # --------------------------------
 def _write_summary_sheet_v5(
     ws,
@@ -488,6 +474,7 @@ def _write_summary_sheet_v5(
     
     title_font = Font(size=13, bold=True)
     header_fill = PatternFill("solid", fgColor="DDEEFF")
+    yellow_fill = PatternFill("solid", fgColor="FFFF00") # 노란색 배경
     total_fill = PatternFill("solid", fgColor="F0F0F0")
 
     align_left_wrap = Alignment(horizontal="left", vertical="center", wrap_text=True) 
@@ -551,12 +538,15 @@ def _write_summary_sheet_v5(
             ws.cell(cur_row, c_offset, "-")
             cur_row += 1
             # LGSP 셀 추가
-            ws.merge_cells(start_row=cur_row, start_column=c_offset, end_row=cur_row+2, end_column=c_offset)
-            lgsp_cell = ws.cell(row=cur_row, column=c_offset, value="LGSP")
+            lgsp_start_row = cur_row
+            ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_start_row + 2, end_column=c_offset)
+            lgsp_cell = ws.cell(row=lgsp_start_row, column=c_offset, value="LGSP")
             apply_styles(lgsp_cell, align=align_center_wrap, border=table_border)
-            for r_off in range(3): # Apply border to merged area
-                 for i in range(len(headers)): apply_styles(ws.cell(cur_row + r_off, c_offset + i), border=table_border)
-            cur_row += 3
+            # 병합된 영역 나머지 셀에도 테두리 적용
+            for r in range(lgsp_start_row, lgsp_start_row + 3):
+                for i in range(1, len(headers)):
+                    apply_styles(ws.cell(r, c_offset + i), border=table_border)
+            cur_row = lgsp_start_row + 3
             # 빈 토탈 행
             apply_styles(ws.cell(cur_row, c_offset, value="Total"), font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
             for i in range(1, len(headers)): apply_styles(ws.cell(cur_row, c_offset + i), fill=total_fill, border=table_border)
@@ -645,12 +635,6 @@ def _write_summary_sheet_v5(
             cur_row = lgsp_end_row + 1 # cur_row 업데이트
             # --- LGSP 셀 추가 끝 ---
 
-            # spare_rows = 3 # 제거됨 (LGSP로 대체)
-            # for _ in range(spare_rows):
-            #     for i in range(len(headers)):
-            #         apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
-            #     cur_row += 1
-
             total_label_cell = ws.cell(row=cur_row, column=c_offset, value="Total")
             apply_styles(total_label_cell, font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
             apply_styles(ws.cell(cur_row, c_offset+1), fill=total_fill, border=table_border)
@@ -723,142 +707,187 @@ def _write_summary_sheet_v5(
     all_rs_totals = {**port_totals, **stbd_totals}
     rs_tables_end_row = max(port_next_row, stbd_next_row) - 1
  
-    new_table_start_col = stbd_col_offset + len(headers) + 2
+    # --- Fan Table (오른쪽 표) ---
+    fan_table_start_col = stbd_col_offset + len(headers) + 1 # P열 -> Q열로 변경 (+1 제거)
 
-    gap_col_2_idx = new_table_start_col - 1
-    ws.column_dimensions[get_column_letter(gap_col_2_idx)].width = 5
+    # 간격 열(P열) 너비를 1로 조정
+    gap_col_2_idx = fan_table_start_col - 1
+    ws.column_dimensions[get_column_letter(gap_col_2_idx)].width = 1
     ws.column_dimensions[get_column_letter(gap_col_2_idx)].auto_size = False
 
-    table1_row_titles = [
+    table1_row_titles = [ # Q열, T열 Description에 들어갈 내용
         "SIDE PASSGAEWAY(FWD)", "No.1A (Exp)", "No.2F (Exp)", "No.3F", "No.4F",
         "SIDE PASSAGEWAY(AFT)", "No.5F1", "No.5F2", "No.5A1", "No.5A2",
         "No.6F1", "No.6F2", "No.6A1", "No.6A2", "No.7F", "No.8F",
         "PIPE DUCT", "No.9F"
     ]
-    table1_data_headers = [
-        "Cargo hold (STBD)", "No. of C/Hold fans (STBD)", "Cargo hold(PORT)",
-        "No. of C/Hold fans (PORT)", "Total No. of C/Hold fans",
-        "C/Hold fan capacity (Rated, kW)", "Efficiency", "Load factor", "Div. factor",
-        "Actual power consumption (kW)", "Actual power consumption(STBD, kW)",
+    
+    # 새로운 헤더 텍스트 (W열 ~ AE열)
+    merged_headers_w_ae = [
+        "Total No. of C/Hold fans", 
+        "C/Hold fan capacity (Rated, kW)", 
+        "C/Hold fan capacity (Rated, A)", 
+        "Efficiency", 
+        "Load factor", 
+        "Div. factor", 
+        "Actual power consumption (kW)", 
+        "Actual power consumption(STBD, kW)", 
         "Actual power consumption(PORT, kW)"
     ]
     
-    table1_row_title_width = 23
-    # 요청된 table1_data_widths 값 반영
-    table1_data_widths = [
-        16.25, 23, 13.25, 17, 15.7, 14.5, 15.25, 7.25, 11.75, 11.75, 11.75
-    ]
+    # 요청된 새로운 너비 적용 (Q열부터 AE열까지, 총 15개 열)
+    new_table1_data_widths = [22, 11, 11, 22, 11, 11, 11, 11, 11, 8, 6, 6, 10.5, 10.5, 10.5]
 
     fan_title_row = 1
-    fan_table_end_col = new_table_start_col + len(table1_data_headers) -1
-    ws.merge_cells(start_row=fan_title_row, start_column=new_table_start_col, end_row=fan_title_row, end_column=fan_table_end_col)
-    fan_title_cell = ws.cell(row=fan_title_row, column=new_table_start_col, value="Reefer section에서 배전되는 Fans")
+    fan_table_end_col = fan_table_start_col + len(new_table1_data_widths) - 1 # 열 개수 변경 반영
+    ws.merge_cells(start_row=fan_title_row, start_column=fan_table_start_col, end_row=fan_title_row, end_column=fan_table_end_col)
+    fan_title_cell = ws.cell(row=fan_title_row, column=fan_table_start_col, value="Reefer section에서 배전되는 Fans")
     apply_styles(fan_title_cell, font=bold_font, align=align_left) 
 
-    table1_header_row = 2
+    table1_header_row_2 = 2
+    table1_header_row_3 = 3
     
-    ws.column_dimensions[get_column_letter(new_table_start_col)].width = round(table1_row_title_width + 0.00001)
-    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False
-    set_column_widths(new_table_start_col + 1, table1_data_widths)
+    # P열 너비는 설정 안 함
+    set_column_widths(fan_table_start_col, new_table1_data_widths) # Q열부터 너비 적용
 
-    for i, header in enumerate(table1_data_headers):
-        col_idx = new_table_start_col + i
-        cell = ws.cell(row=table1_header_row, column=col_idx, value=header)
+    # --- 새로운 헤더 작성 로직 ---
+    q_col = fan_table_start_col # Q열 인덱스
+    
+    # Q2:R2 병합 및 텍스트/스타일 적용 (노란색 배경 추가)
+    ws.merge_cells(start_row=table1_header_row_2, start_column=q_col, end_row=table1_header_row_2, end_column=q_col + 1)
+    apply_styles(ws.cell(table1_header_row_2, q_col, value="Cargo hold Fan (STBD)"), font=stbd_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_2, q_col + 1), fill=yellow_fill, border=table_border) # 병합된 셀 테두리 및 배경
+    # Q3, R3 (노란색 배경 추가)
+    apply_styles(ws.cell(table1_header_row_3, q_col, value="Description"), font=stbd_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_3, q_col + 1, value="Q'ty"), font=stbd_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+
+    # S2:S3 병합 및 텍스트/스타일 적용 (노란색 배경 추가)
+    s_col = q_col + 2
+    ws.merge_cells(start_row=table1_header_row_2, start_column=s_col, end_row=table1_header_row_3, end_column=s_col)
+    apply_styles(ws.cell(table1_header_row_2, s_col, value="LGSP No."), font=bold_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_3, s_col), fill=yellow_fill, border=table_border) # 병합된 셀 테두리 및 배경
+
+    # T2:U2 병합 및 텍스트/스타일 적용 (노란색 배경 추가)
+    t_col = s_col + 1
+    ws.merge_cells(start_row=table1_header_row_2, start_column=t_col, end_row=table1_header_row_2, end_column=t_col + 1)
+    apply_styles(ws.cell(table1_header_row_2, t_col, value="Cargo hold Fan (PORT)"), font=port_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_2, t_col + 1), fill=yellow_fill, border=table_border) # 병합된 셀 테두리 및 배경
+    # T3, U3 (노란색 배경 추가)
+    apply_styles(ws.cell(table1_header_row_3, t_col, value="Description"), font=port_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_3, t_col + 1, value="Q'ty"), font=port_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+
+    # V2:V3 병합 및 텍스트/스타일 적용 (노란색 배경 추가)
+    v_col = t_col + 2
+    ws.merge_cells(start_row=table1_header_row_2, start_column=v_col, end_row=table1_header_row_3, end_column=v_col)
+    apply_styles(ws.cell(table1_header_row_2, v_col, value="LGSP No."), font=bold_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
+    apply_styles(ws.cell(table1_header_row_3, v_col), fill=yellow_fill, border=table_border) # 병합된 셀 테두리 및 배경
+    
+    # W2:AE3 병합 헤더 (기본 배경색 사용)
+    w_col = v_col + 1
+    for i, header in enumerate(merged_headers_w_ae):
+        col_idx = w_col + i
+        ws.merge_cells(start_row=table1_header_row_2, start_column=col_idx, end_row=table1_header_row_3, end_column=col_idx)
+        cell = ws.cell(row=table1_header_row_2, column=col_idx, value=header)
+        # 폰트 색상 조건부 적용
         current_font = bold_font
-        if i in [0, 1, 10]:
-            current_font = stbd_font
-        elif i in [2, 3, 11]:
-            current_font = port_font
+        if header == "Actual power consumption(STBD, kW)": current_font = stbd_font
+        elif header == "Actual power consumption(PORT, kW)": current_font = port_font
         apply_styles(cell, font=current_font, fill=header_fill, align=align_center_wrap, border=table_border)
+        apply_styles(ws.cell(table1_header_row_3, col_idx), fill=header_fill, border=table_border) # 병합된 셀 테두리
+    # --- 새로운 헤더 작성 로직 끝 ---
 
-    current_row_for_fan_table = table1_header_row + 1
-    # [START] 기존 행 작성 로직
+    current_row_for_fan_table = table1_header_row_3 + 1 # 데이터 시작 행 변경 (4행부터)
     for title in table1_row_titles:
-        cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col, value=title)
-        apply_styles(cell, align=align_left_wrap, border=table_border)
-        
         row_num = current_row_for_fan_table
-        stbd_fans_col = get_column_letter(new_table_start_col + 1)
-        port_fans_col = get_column_letter(new_table_start_col + 3)
-        total_fans_col = get_column_letter(new_table_start_col + 4) 
-        cap_col = get_column_letter(new_table_start_col + 5)
-        eff_col = get_column_letter(new_table_start_col + 6)
-        load_col = get_column_letter(new_table_start_col + 7)
-        div_col = get_column_letter(new_table_start_col + 8)
-        actual_power_col = get_column_letter(new_table_start_col + 9)
-
-        for i in range(len(table1_data_headers) - 1):
-            col_idx = new_table_start_col + 1 + i
-            header_index = i + 1
-            cell = ws.cell(row=current_row_for_fan_table, column=col_idx)
-            
-            value_to_add = None
-            num_format = None
-            align = align_right
-            
-            if header_index == 2:
-                value_to_add = title
-                align = align_left_wrap
-            elif header_index == 4:
-                value_to_add = f"=SUM(${stbd_fans_col}{row_num},${port_fans_col}{row_num})"
-                num_format = '0'
-            elif header_index == 6:
-                value_to_add = 0.88
-                num_format = '0.00'
-            elif header_index == 7:
-                value_to_add = 0.8
-                num_format = '0.0'
-            elif header_index == 8:
-                value_to_add = 1
-                num_format = '0'
-            elif header_index == 9:
-                value_to_add = f"=IFERROR((${cap_col}{row_num}/${eff_col}{row_num})*${load_col}{row_num}*${div_col}{row_num}, 0)"
-                num_format = '0.00'
-            elif header_index == 10:
-                value_to_add = f"=IFERROR(${actual_power_col}{row_num}*${stbd_fans_col}{row_num}, 0)"
-                num_format = '0.00'
-            elif header_index == 11:
-                value_to_add = f"=IFERROR(${actual_power_col}{row_num}*${port_fans_col}{row_num}, 0)"
-                num_format = '0.00'
-
-            if value_to_add is not None:
-                cell.value = value_to_add
-                apply_styles(cell, border=table_border, align=align, num_format=num_format)
-            else:
-                apply_styles(cell, border=table_border)
         
-        current_row_for_fan_table += 1
-    # [END] 기존 행 작성 로직
+        # 행 제목을 Q열과 T열에 나눠서 입력
+        apply_styles(ws.cell(row_num, q_col, value=title), align=align_left_wrap, border=table_border) # STBD Description (Q)
+        apply_styles(ws.cell(row_num, t_col, value=title), align=align_left_wrap, border=table_border) # PORT Description (T)
 
-    # 요청에 따라 Reefer section에서 배전되는 Fans 표에 5행 빈칸 추가
-    for _ in range(5):
-        # 첫 번째 (제목) 열
-        cell = ws.cell(row=current_row_for_fan_table, column=new_table_start_col)
-        apply_styles(cell, align=align_left_wrap, border=table_border) # 빈칸도 border 적용
+        # 열 인덱스 재정의 (수식 적용 시 필요) - 열 문자로 변경
+        stbd_qty_col_letter = get_column_letter(q_col + 1) # R열
+        port_qty_col_letter = get_column_letter(t_col + 1) # U열
+        total_fans_col_letter = get_column_letter(w_col) # W열
+        cap_kw_col_letter = get_column_letter(w_col + 1) # X열
+        cap_a_col_letter = get_column_letter(w_col + 2) # Y열
+        eff_col_letter = get_column_letter(w_col + 3) # Z열
+        load_col_letter = get_column_letter(w_col + 4) # AA열
+        div_col_letter = get_column_letter(w_col + 5) # AB열
+        actual_power_col_letter = get_column_letter(w_col + 6) # AC열
+        actual_stbd_col_letter = get_column_letter(w_col + 7) # AD열
+        actual_port_col_letter = get_column_letter(w_col + 8) # AE열
 
-        # 나머지 데이터 열
-        for i in range(len(table1_data_headers) - 1): 
-            col_idx = new_table_start_col + 1 + i
+        # 데이터/수식 적용 (R, U, W ~ AE 열)
+        for i in range(len(new_table1_data_widths)):
+            col_idx = fan_table_start_col + i
             cell = ws.cell(row=current_row_for_fan_table, column=col_idx)
-            apply_styles(cell, border=table_border)
+            
+            # 기본 테두리 적용 (Description 열 제외 - 위에서 이미 적용됨)
+            if col_idx != q_col and col_idx != t_col:
+                apply_styles(cell, border=table_border) 
+            
+            # 수식 및 값 적용
+            if col_idx == q_col + 1: # STBD Q'ty (R열) - 입력값
+                 apply_styles(cell, align=align_right, num_format='0') # 사용자가 직접 입력할 칸
+            elif col_idx == t_col + 1: # PORT Q'ty (U열) - 입력값
+                 apply_styles(cell, align=align_right, num_format='0') # 사용자가 직접 입력할 칸
+            elif col_idx == w_col : # Total No. (W열)
+                cell.value = f"=SUM(${stbd_qty_col_letter}{row_num},${port_qty_col_letter}{row_num})"
+                apply_styles(cell, align=align_right, num_format='0')
+            # X열 (Rated, kW), Y열 (Rated, A) - 사용자가 직접 입력할 칸
+            elif col_idx == w_col + 1 or col_idx == w_col + 2: 
+                 apply_styles(cell, align=align_right, num_format='0.00')
+            elif col_idx == w_col + 3: # Efficiency (Z열)
+                cell.value = 0.88
+                apply_styles(cell, align=align_right, num_format='0.00')
+            elif col_idx == w_col + 4: # Load factor (AA열)
+                cell.value = 0.8
+                apply_styles(cell, align=align_right, num_format='0.0')
+            elif col_idx == w_col + 5: # Div. factor (AB열)
+                cell.value = 1
+                apply_styles(cell, align=align_right, num_format='0')
+            elif col_idx == w_col + 6: # Actual power consumption (kW) (AC열)
+                 cell.value = f"=IFERROR((${cap_kw_col_letter}{row_num}/${eff_col_letter}{row_num})*${load_col_letter}{row_num}*${div_col_letter}{row_num}, 0)"
+                 apply_styles(cell, align=align_right, num_format='0.00')
+            elif col_idx == w_col + 7: # Actual power consumption(STBD, kW) (AD열)
+                 cell.value = f"=IFERROR((${actual_power_col_letter}{row_num}/${total_fans_col_letter}{row_num})*${stbd_qty_col_letter}{row_num}, 0)" # 수정된 수식
+                 apply_styles(cell, align=align_right, num_format='0.00')
+            elif col_idx == w_col + 8: # Actual power consumption(PORT, kW) (AE열)
+                 cell.value = f"=IFERROR((${actual_power_col_letter}{row_num}/${total_fans_col_letter}{row_num})*${port_qty_col_letter}{row_num}, 0)" # 수정된 수식
+                 apply_styles(cell, align=align_right, num_format='0.00')
+            # S열, V열 (LGSP No.)은 비워둠 (사용자가 입력)
+            elif col_idx == s_col or col_idx == v_col:
+                 apply_styles(cell, align=align_center_wrap)
+
 
         current_row_for_fan_table += 1
 
-    fan_table_end_row = current_row_for_fan_table - 1 # fan_table_end_row 갱신
+    # 빈 행 5개 추가
+    for _ in range(5):
+        # Q, T열 Description에도 테두리 적용
+        apply_styles(ws.cell(current_row_for_fan_table, q_col), align=align_left_wrap, border=table_border)
+        apply_styles(ws.cell(current_row_for_fan_table, t_col), align=align_left_wrap, border=table_border)
+        # 나머지 열 테두리 적용
+        for i in range(len(new_table1_data_widths)):
+             col_idx = fan_table_start_col + i
+             if col_idx != q_col and col_idx != t_col:
+                 apply_styles(ws.cell(current_row_for_fan_table, col_idx), border=table_border)
+        current_row_for_fan_table += 1
 
-    # Reefer CNTR 계산 테이블을 한 행 위로 이동 (4 -> 3 -> 2로 변경)
+    fan_table_end_row = current_row_for_fan_table - 1
+
+    # Reefer CNTR 계산 테이블 위치
     REEFER_TABLE_ROW_GAP = 2 
     reefer_title_row = fan_table_end_row + REEFER_TABLE_ROW_GAP
 
-    # SOx Scrubber 열을 제거
+    # Reefer CNTR 테이블 헤더 및 너비
     table2_horizontal_headers = [
-        "Reefer Section board", "Ref. container(FEU)", "Reefer container(kVA)",
-        "Cargo fan(kVA)", "Total capacity(kVA)", "TR capacity(kVA)", # SOx Scrubber 제거됨
-        "TR capacity(SPEC)"
+        "Reefer Section board", "Ref. container (FEU)", "Reefer container (kVA)",
+        "Cargo fan(kVA)", "Total capacity (kVA)", "TR capacity (kVA)", 
+        "TR capacity (SPEC)"
     ]
-    
     # 요청된 table2_data_widths 값 반영
-    table2_data_widths = [16.25, 23, 13.25, 17, 16, 15.25] 
+    table2_data_widths = [11, 11, 22, 11, 10.5, 10.5] 
 
     table2_vertical_headers = []
     if rs_total > 0:
@@ -866,25 +895,32 @@ def _write_summary_sheet_v5(
             suffix = "(S)" if i % 2 == 1 else "(P)"
             table2_vertical_headers.append(f"RS-{i} {suffix}")
     
-    table2_vertical_header_width = 23
+    table2_vertical_header_width = 22
 
     table2_header_row = reefer_title_row + 1 
     
-    reefer_table_end_col = new_table_start_col + len(table2_horizontal_headers) - 1
-    ws.merge_cells(start_row=reefer_title_row, start_column=new_table_start_col, end_row=reefer_title_row, end_column=reefer_table_end_col)
-    reefer_title_cell = ws.cell(row=reefer_title_row, column=new_table_start_col, value="Reefer CNTR 계산")
+    reefer_table_end_col = fan_table_start_col + len(table2_horizontal_headers) - 1 # fan_table_start_col 기준으로 변경
+    ws.merge_cells(start_row=reefer_title_row, start_column=fan_table_start_col, end_row=reefer_title_row, end_column=reefer_table_end_col)
+    reefer_title_cell = ws.cell(row=reefer_title_row, column=fan_table_start_col, value="Reefer CNTR 계산")
     apply_styles(reefer_title_cell, font=bold_font, align=align_left)
 
-    ws.column_dimensions[get_column_letter(new_table_start_col)].width = round(table2_vertical_header_width)
-    ws.column_dimensions[get_column_letter(new_table_start_col)].auto_size = False
-    set_column_widths(new_table_start_col + 1, table2_data_widths) 
+    ws.column_dimensions[get_column_letter(fan_table_start_col)].width = round(table2_vertical_header_width)
+    ws.column_dimensions[get_column_letter(fan_table_start_col)].auto_size = False
+    set_column_widths(fan_table_start_col + 1, table2_data_widths) 
 
+    # --- Reefer CNTR 헤더 병합 및 스타일 적용 ---
     for i, header in enumerate(table2_horizontal_headers):
-        col_idx = new_table_start_col + i
+        col_idx = fan_table_start_col + i
+        # 헤더 셀과 아래 셀 병합
+        ws.merge_cells(start_row=table2_header_row, start_column=col_idx, end_row=table2_header_row + 1, end_column=col_idx)
         cell = ws.cell(row=table2_header_row, column=col_idx, value=header)
-        apply_styles(cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
+        # TR capacity(SPEC) 헤더만 노란색 배경 적용
+        fill_color = yellow_fill if header == "TR capacity(SPEC)" else header_fill
+        apply_styles(cell, font=bold_font, fill=fill_color, align=align_center_wrap, border=table_border)
+        # 병합된 아래 셀에도 스타일 적용 (테두리, 배경)
+        apply_styles(ws.cell(table2_header_row + 1, col_idx), fill=fill_color, border=table_border)
         
-    current_row_for_reefer_table = table2_header_row + 1
+    current_row_for_reefer_table = table2_header_row + 2 # 데이터 시작 행 변경 (병합으로 인해 +2)
     
     table2_colors = ["EBF1DE", "D8E4BC", "E4DFEC", "CCC0DA", "DAEEF3", "B7DEE8"]
     num_colors = len(table2_colors)
@@ -895,66 +931,71 @@ def _write_summary_sheet_v5(
         color_hex = table2_colors[idx % num_colors]
         row_fill = PatternFill("solid", fgColor=color_hex)
 
-        cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col, value=title)
+        cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col, value=title)
         apply_styles(cell, align=align_left_wrap, border=table_border, font=bold_font, fill=row_fill)
         
         ref_con_total_addr = all_rs_totals.get(rs_index, "0")
-        ref_feu_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 1, value=f"={ref_con_total_addr}")
+        ref_feu_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 1, value=f"={ref_con_total_addr}")
         apply_styles(ref_feu_cell, border=table_border, fill=row_fill, align=align_right, num_format='0')
 
-        ref_kva_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 2)
+        ref_kva_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 2)
         apply_styles(ref_kva_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
 
-        cargo_fan_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 3)
+        cargo_fan_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 3)
         apply_styles(cargo_fan_cell, border=table_border, fill=row_fill)
 
-        # Total capacity cell index: new_table_start_col + 4
-        total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 4, 
+        # Total capacity cell index: fan_table_start_col + 4
+        total_cap_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 4, 
                                  value=f"=SUM({ref_kva_cell.coordinate},{cargo_fan_cell.coordinate})") # sox_cell 제거
         apply_styles(total_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
 
-        # TR capacity cell index: new_table_start_col + 5
-        tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 5)
+        # TR capacity cell index: fan_table_start_col + 5
+        tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 5)
         apply_styles(tr_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
     
-        # TR spec cell index: new_table_start_col + 6
-        tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=new_table_start_col + 6)
-        apply_styles(tr_spec_cell, border=table_border, fill=row_fill)
+        # TR spec cell index: fan_table_start_col + 6 (데이터 셀은 row_fill 적용)
+        tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 6)
+        apply_styles(tr_spec_cell, border=table_border, fill=row_fill) # 헤더와 달리 데이터 셀은 기존 row_fill 사용
 
         current_row_for_reefer_table += 1
     reefer_table_end_row = current_row_for_reefer_table - 1
 
     tr_table_start_row = reefer_table_end_row + 2
 
-    cell_r1_c1 = ws.cell(row=tr_table_start_row, column=new_table_start_col, value="Reefer cntr for TR")
+    cell_r1_c1 = ws.cell(row=tr_table_start_row, column=fan_table_start_col, value="Reefer cntr for TR")
     apply_styles(cell_r1_c1, align=align_left_wrap, border=table_border, font=bold_font)
-    cell_r1_c2 = ws.cell(row=tr_table_start_row, column=new_table_start_col + 1, value=10.6)
+    cell_r1_c2 = ws.cell(row=tr_table_start_row, column=fan_table_start_col + 1, value=10.6)
     apply_styles(cell_r1_c2, align=align_right, border=table_border, num_format='0.0" kVA"')
     
     tr_k_per_cntr_addr_abs = f"${get_column_letter(cell_r1_c2.column)}${cell_r1_c2.row}"
     
     tr_table_current_row = tr_table_start_row + 1
-    cell_r2_c1 = ws.cell(row=tr_table_current_row, column=new_table_start_col, value="TR efficiency")
+    cell_r2_c1 = ws.cell(row=tr_table_current_row, column=fan_table_start_col, value="TR efficiency")
     apply_styles(cell_r2_c1, align=align_left_wrap, border=table_border, font=bold_font)
     
-    cell_r2_c2 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 1, value=0.95)
+    cell_r2_c2 = ws.cell(row=tr_table_current_row, column=fan_table_start_col + 1, value=0.95)
     apply_styles(cell_r2_c2, align=align_right, border=table_border, num_format='0.00')
 
     tr_eff_addr_abs = f"${get_column_letter(cell_r2_c2.column)}${cell_r2_c2.row}"
 
-    cell_r2_c3 = ws.cell(row=tr_table_current_row, column=new_table_start_col + 2, value="실제 TR도면 접수 후 다시 기입")
+    # "실제 TR도면..." 셀 병합 (오른쪽 셀과)
+    note_col_start = fan_table_start_col + 2
+    ws.merge_cells(start_row=tr_table_current_row, start_column=note_col_start, end_row=tr_table_current_row, end_column=note_col_start + 1)
+    cell_r2_c3 = ws.cell(row=tr_table_current_row, column=note_col_start, value="실제 TR도면 접수 후 다시 기입")
     apply_styles(cell_r2_c3, align=align_left_wrap, border=None, font=small_font)
+    apply_styles(ws.cell(tr_table_current_row, note_col_start + 1), border=None) # 병합된 셀 테두리 제거
 
-    for r_idx in range(table2_header_row + 1, reefer_table_end_row + 1):
-        ref_feu_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 1).coordinate
+
+    for r_idx in range(table2_header_row + 2, reefer_table_end_row + 1): # 데이터 시작 행 변경 반영 (+2)
+        ref_feu_cell_coord = ws.cell(row=r_idx, column=fan_table_start_col + 1).coordinate
         
-        ref_kva_cell = ws.cell(row=r_idx, column=new_table_start_col + 2)
+        ref_kva_cell = ws.cell(row=r_idx, column=fan_table_start_col + 2)
         ref_kva_cell.value = f"={ref_feu_cell_coord}*{tr_k_per_cntr_addr_abs}"
 
-        # Total capacity cell index 변경 반영: new_table_start_col + 5 -> new_table_start_col + 4
-        total_cap_cell_coord = ws.cell(row=r_idx, column=new_table_start_col + 4).coordinate 
-        # TR capacity cell index 변경 반영: new_table_start_col + 6 -> new_table_start_col + 5
-        tr_cap_cell = ws.cell(row=r_idx, column=new_table_start_col + 5)
+        # Total capacity cell index: fan_table_start_col + 4
+        total_cap_cell_coord = ws.cell(row=r_idx, column=fan_table_start_col + 4).coordinate 
+        # TR capacity cell index: fan_table_start_col + 5
+        tr_cap_cell = ws.cell(row=r_idx, column=fan_table_start_col + 5)
         tr_cap_cell.value = f"=IFERROR({total_cap_cell_coord}/{tr_eff_addr_abs},0)"
 
 
@@ -1141,7 +1182,7 @@ class GridCanvas(ttk.Frame):
                                      command=lambda: self._toggle_mode(self.mode_socket, True, self.btn_socket))
         self.btn_socket.pack(side="left", padx=2)
 
-        # Initial appearance setup using state
+        # Initial appearance setup using state (모두 선택 안 함)
         self._update_all_button_appearances()
         
         # --- Color / Number Inputs (Visibility controlled) ---
