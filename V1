@@ -820,7 +820,7 @@ def _write_summary_sheet_v5(
         "Actual power consumption(PORT, kW)"
     ]
     
-    new_table1_data_widths = [23, 8.5, 9, 23, 8.5, 9, 10, 10.5, 10.5, 8, 6, 6, 10.5, 10.5, 10.5]
+    new_table1_data_widths = [23, 8.5, 9, 23, 8.5, 9, 10.5, 10.5, 10.5, 8, 6, 6, 10.5, 10.5, 10.5]
 
     fan_title_row = 1
     fan_table_end_col = fan_table_start_col + len(new_table1_data_widths) - 1
@@ -960,7 +960,7 @@ def _write_summary_sheet_v5(
         "Cargo fan(kVA)", "Total Cap (kVA)", "TR Cap (kVA)", 
         "TR Cap (SPEC)"
     ]
-    table2_data_widths = [8.5, 9, 23, 8.5, 9, 10] 
+    table2_data_widths = [8.5, 9, 23, 8.5, 9, 10.5] 
 
     table2_vertical_headers = []
     if rs_total > 0:
