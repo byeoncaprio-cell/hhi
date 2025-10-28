@@ -492,7 +492,7 @@ def _write_summary_sheet_v5(
     
     headers = ["RS", "RD", "REF. CON", "A", "BREAKER", "CABLE", "KVA"]
     
-    col_widths = [7.5, 7.5, 8.5, 8, 10.5, 10.5, 9.5] 
+    col_widths = [7.5, 7.5, 8.5, 8, 10.5, 12, 9.5] 
 
     # --- 3. 테이블 작성 헬퍼 함수 ---
     def apply_styles(cell: Cell, font=None, fill=None, align=None, border=None, num_format=None):
@@ -519,256 +519,236 @@ def _write_summary_sheet_v5(
     
     def process_rs_list(rs_list: list, s_row: int, c_offset: int,
                         headers: list, bold_font, header_fill, align_center_wrap, table_border,
-                        side: str # <--- side 파라미터 (PORT/STBD)
-                       ) -> Tuple[int, Dict[int, str]]:
+                        side: str):
         """
-        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다. (다음 시작 행, {RS번호: REF.CON Total 셀 주소}) 딕셔너리 반환
+        지정된 RS 리스트에 대한 테이블을 그리고 수식을 채웁니다.
+        반환: (다음 시작 행, {RS번호: REF.CON Total 셀 주소})
         """
-        # --- Fan Table 범위 ---
+        # --- Fan Table 참조 범위(변경 없음) ---
         fan_data_start_row = 4
         fan_data_end_row = 26
-        
-        fan_rated_a_range = f"$Y${fan_data_start_row}:$Y${fan_data_end_row}"      # Rated, A (Y)
-        fan_stbd_qty_range = f"$R${fan_data_start_row}:$R${fan_data_end_row}"     # STBD Q'ty (R)
-        fan_port_qty_range = f"$U${fan_data_start_row}:$U${fan_data_end_row}"     # PORT Q'ty (U)
-        fan_stbd_lgsp_range = f"$S${fan_data_start_row}:$S${fan_data_end_row}"    # STBD LGSP No. (S)
-        fan_port_lgsp_range = f"$V${fan_data_start_row}:$V${fan_data_end_row}"    # PORT LGSP No. (V)
-        
-        # LGSP BREAKER/CABLE 수식 빌더 (A 셀 주소를 받아 중첩 IF 문자열 반환)
-        def lgsp_breaker_formula(a_addr: str) -> str:
-            return (
-                f'=IF(ROUND({a_addr},2)<150,"160/150",'
-                f'IF(ROUND({a_addr},2)<160,"160/160",'
-                f'IF(ROUND({a_addr},2)<175,"250/175",'
-                f'IF(ROUND({a_addr},2)<200,"250/200",'
-                f'IF(ROUND({a_addr},2)<225,"250/225",'
-                f'IF(ROUND({a_addr},2)<250,"250/250",'
-                f'IF(ROUND({a_addr},2)<300,"400/300",'
-                f'IF(ROUND({a_addr},2)<350,"400/350",'
-                f'IF(ROUND({a_addr},2)<400,"400/400",'
-                f'IF(ROUND({a_addr},2)<500,"630/500","630/630"))))))))))'
-            )
-
-        def lgsp_cable_formula(a_addr: str) -> str:
-            return (
-                f'=IF(ROUND({a_addr},2)<89,"HT25(89A)",'
-                f'IF(ROUND({a_addr},2)<110,"HT35(110A)",'
-                f'IF(ROUND({a_addr},2)<137,"HT50(137A)",'
-                f'IF(ROUND({a_addr},2)<169,"HT70(169A)",'
-                f'IF(ROUND({a_addr},2)<205,"HT95(205A)",'
-                f'IF(ROUND({a_addr},2)<237,"HT95(237A)",'
-                f'IF(ROUND({a_addr},2)<274,"2xHT50(137A)",'
-                f'IF(ROUND({a_addr},2)<338,"2xHT70(169A)",'
-                f'IF(ROUND({a_addr},2)<410,"2xHT95(237A)",'
-                f'IF(ROUND({a_addr},2)<474,"2xHT120(237A)",""))))))))))'
-            )
-
-        # PORT / STBD에 따른 LGSP A 수식
-        def lgsp_a_formula(rd_cell_coord: str) -> str:
-            if side == "PORT":
-                return f"=IFERROR(SUMPRODUCT(--({fan_port_lgsp_range}={rd_cell_coord}), {fan_port_qty_range}, {fan_rated_a_range}), 0)"
-            else:
-                return f"=IFERROR(SUMPRODUCT(--({fan_stbd_lgsp_range}={rd_cell_coord}), {fan_stbd_qty_range}, {fan_rated_a_range}), 0)"
-
+        fan_rated_a_range   = f"$Y${fan_data_start_row}:$Y${fan_data_end_row}"
+        fan_stbd_qty_range  = f"$R${fan_data_start_row}:$R${fan_data_end_row}"
+        fan_port_qty_range  = f"$U${fan_data_start_row}:$U${fan_data_end_row}"
+        fan_stbd_lgsp_range = f"$S${fan_data_start_row}:$S${fan_data_end_row}"
+        fan_port_lgsp_range = f"$V${fan_data_start_row}:$V${fan_data_end_row}"
+    
         cur_row = s_row
-        rs_totals = {} # {RS번호: REF.CON Total 셀 주소}
-
+        rs_totals = {}
+    
+        # ★ LGSP 행 배경색 추가
+        lgsp_fill = PatternFill("solid", fgColor="EBF1DE")
+    
         if rpr <= 0 or not rs_list:
             # 헤더
             for i, h in enumerate(headers):
                 h_cell = ws.cell(row=cur_row, column=c_offset + i, value=h)
                 apply_styles(h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
             cur_row += 1
-            # 빈 데이터 행 (표 형식 유지)
-            for i, _ in enumerate(headers):
+    
+            # 빈 데이터 행
+            for i in range(len(headers)):
                 apply_styles(ws.cell(cur_row, c_offset+i), border=table_border)
             ws.cell(cur_row, c_offset, "-")
             cur_row += 1
-
-            # --- LGSP 3행 ---
+    
+            # LGSP 3행 (병합 + 각 셀 테두리/배경, A/Breaker/Cable 수식 포함)
             lgsp_start_row = cur_row
             lgsp_end_row = lgsp_start_row + 2
             ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_end_row, end_column=c_offset)
             lgsp_cell = ws.cell(row=lgsp_start_row, column=c_offset, value="LGSP")
-            apply_styles(lgsp_cell, align=align_center_wrap, border=table_border)
-
-            # [중요] 병합된 LGSP 세로 칸의 나머지 셀에도 테두리 적용(좌측 표 경계 깨짐 방지)
+            apply_styles(lgsp_cell, align=align_center_wrap, border=table_border, fill=lgsp_fill)
+    
             for r in range(lgsp_start_row, lgsp_end_row + 1):
-                apply_styles(ws.cell(r, c_offset), border=table_border)
-
-            for r in range(lgsp_start_row, lgsp_end_row + 1):
-                rd_coord = f"{get_column_letter(c_offset + 1)}{r}"   # RD 입력칸 주소
-                a_addr  = f"{get_column_letter(c_offset + 3)}{r}"   # A 칸 주소
-
-                # RD (사용자 입력칸)
-                apply_styles(ws.cell(r, c_offset + 1), border=table_border, align=align_left_wrap)
-                # REF.CON (빈칸)
-                apply_styles(ws.cell(r, c_offset + 2), border=table_border, align=align_right, num_format='0')
-                # A (수식)
-                a_cell = ws.cell(r, c_offset + 3, value=lgsp_a_formula(rd_coord))
-                apply_styles(a_cell, border=table_border, align=align_right, num_format='0.00')
-                # BREAKER (수식)
-                breaker_cell = ws.cell(r, c_offset + 4, value=lgsp_breaker_formula(a_addr))
-                apply_styles(breaker_cell, border=table_border, align=align_center_wrap)
-                # CABLE (수식)
-                cable_cell = ws.cell(r, c_offset + 5, value=lgsp_cable_formula(a_addr))
-                apply_styles(cable_cell, border=table_border, align=align_center_wrap)
-                # KVA (빈칸)
-                apply_styles(ws.cell(r, c_offset + 6), border=table_border, align=align_right, num_format='0.00')
-
+                # RD 입력칸
+                rd_cell = ws.cell(r, c_offset + 1)
+                apply_styles(rd_cell, border=table_border, align=align_left_wrap, fill=lgsp_fill)
+    
+                # A 수식
+                if side == "PORT":
+                    a_formula = f"=IFERROR(SUMPRODUCT(--({fan_port_lgsp_range}={rd_cell.coordinate}), {fan_port_qty_range}, {fan_rated_a_range}), 0)"
+                else:
+                    a_formula = f"=IFERROR(SUMPRODUCT(--({fan_stbd_lgsp_range}={rd_cell.coordinate}), {fan_stbd_qty_range}, {fan_rated_a_range}), 0)"
+                a_cell = ws.cell(r, c_offset + 3, value=a_formula)
+                apply_styles(a_cell, border=table_border, align=align_right, num_format='0.00', fill=lgsp_fill)
+    
+                # ★ Breaker 수식 (요청 로직: / 뒤 숫자보다 A가 작을 때 해당 단계 선택)
+                a_addr = a_cell.coordinate
+                brk = (
+                    f'=IF(ROUND({a_addr},2)<150,"160/150",'
+                    f'IF(ROUND({a_addr},2)<160,"160/160",'
+                    f'IF(ROUND({a_addr},2)<175,"250/175",'
+                    f'IF(ROUND({a_addr},2)<200,"250/200",'
+                    f'IF(ROUND({a_addr},2)<225,"250/225",'
+                    f'IF(ROUND({a_addr},2)<250,"250/250",'
+                    f'IF(ROUND({a_addr},2)<300,"400/300",'
+                    f'IF(ROUND({a_addr},2)<350,"400/350",'
+                    f'IF(ROUND({a_addr},2)<400,"400/400",'
+                    f'IF(ROUND({a_addr},2)<500,"630/500","630/630"))))))))))'
+                )
+                breaker_cell = ws.cell(r, c_offset + 4, value=brk)
+                apply_styles(breaker_cell, border=table_border, align=align_center_wrap, fill=lgsp_fill)
+    
+                # ★ Cable 수식 (2x 계열만 HT → T 로 변경)
+                cable = (
+                    f'=IF({a_addr}<89,"HT25(89A)",'
+                    f'IF({a_addr}<110,"HT35(110A)",'
+                    f'IF({a_addr}<137,"HT50(137A)",'
+                    f'IF({a_addr}<169,"HT70(169A)",'
+                    f'IF({a_addr}<205,"HT95(205A)",'
+                    f'IF({a_addr}<237,"HT95(237A)",'
+                    f'IF({a_addr}<274,"2xHT50(137A)",'
+                    f'IF({a_addr}<338,"2xT70(169A)",'   # ★ HT → T
+                    f'IF({a_addr}<410,"2xT95(237A)",'   # ★ HT → T
+                    f'IF({a_addr}<474,"2xT120(237A)",""))))))))))'
+                )
+                cable_cell = ws.cell(r, c_offset + 5, value=cable)
+                apply_styles(cable_cell, border=table_border, align=align_center_wrap, fill=lgsp_fill)
+    
+                # 나머지 셀 테두리/배경
+                apply_styles(ws.cell(r, c_offset + 2), border=table_border, fill=lgsp_fill)  # REF.CON
+                apply_styles(ws.cell(r, c_offset + 6), border=table_border, fill=lgsp_fill)  # KVA
+    
             cur_row = lgsp_end_row + 1
-        
-            # Total 빈 행
+    
+            # Total 행
             apply_styles(ws.cell(cur_row, c_offset, value="Total"), font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
             for i in range(1, len(headers)):
                 apply_styles(ws.cell(cur_row, c_offset + i), fill=total_fill, border=table_border)
             cur_row += 2
             return cur_row, rs_totals
-
+    
+        # ----- RS 리스트가 있는 일반 케이스 -----
         for rs in rs_list:
             # 헤더
             for i, h in enumerate(headers):
                 h_cell = ws.cell(row=cur_row, column=c_offset + i, value=h)
                 apply_styles(h_cell, font=bold_font, fill=header_fill, align=align_center_wrap, border=table_border)
             cur_row += 1
-            
+    
             rd_list = _rd_list_for_rs(rs, rpr)
             rs_start_row = cur_row
-
+    
             if not rd_list:
                 ws.merge_cells(start_row=cur_row, start_column=c_offset + 1, end_row=cur_row, end_column=c_offset + 6)
-                rs_cell = ws.cell(cur_row, c_offset, f"RS-{rs}")
-                apply_styles(rs_cell, font=bold_font, align=align_left_wrap, border=table_border)
-                rd_cell = ws.cell(cur_row, c_offset + 1, "  (No RDs)")
-                apply_styles(rd_cell, align=align_left_wrap, border=table_border)
+                apply_styles(ws.cell(cur_row, c_offset), font=bold_font, align=align_left_wrap, border=table_border)
+                apply_styles(ws.cell(cur_row, c_offset + 1), align=align_left_wrap, border=table_border)
                 for i in range(2, 7):
                     apply_styles(ws.cell(cur_row, c_offset + i), border=table_border)
                 cur_row += 1
                 rs_start_row_for_sum = -1
             else:
                 for rd in rd_list:
-                    ref_con_cell_addr = f"{get_column_letter(c_offset + 2)}{cur_row}" 
-                    a_cell_addr = f"{get_column_letter(c_offset + 3)}{cur_row}"
-
-                    # RS 병합열(좌측)은 데이터 행에서 빈칸(테두리만)
+                    ref_addr = f"{get_column_letter(c_offset + 2)}{cur_row}"
+                    a_addr   = f"{get_column_letter(c_offset + 3)}{cur_row}"
+    
                     apply_styles(ws.cell(cur_row, c_offset), border=table_border)
-                    
-                    # RD 표시
-                    rd_cell = ws.cell(cur_row, c_offset + 1, f"RD-{rd}") 
-                    apply_styles(rd_cell, align=align_left_wrap, border=table_border)
-                    
-                    # REF.CON
-                    ref_cell = ws.cell(cur_row, c_offset + 2, value=f"=COUNTIF({data_range_str},{rd})")
-                    apply_styles(ref_cell, align=align_right, border=table_border, num_format='0')
-                    
-                    # A
-                    a_cell = ws.cell(cur_row, c_offset + 3, value=f"={ref_con_cell_addr}*17.4*0.9")
-                    apply_styles(a_cell, align=align_right, border=table_border, num_format='0.00')
-                    
-                    # BREAKER (요청: 630보다 작으면 630/630, 500보다 작으면 630/500 추가)
-                    breaker_cell = ws.cell(
-                        cur_row, c_offset + 4,
-                        value=(
-                            f'=IF(ROUND({a_cell_addr},2)<500,"630/500",'
-                            f'IF(ROUND({a_cell_addr},2)<630,"630/630",'
-                            f'IF(ROUND({a_cell_addr},2)>=800,"1250/900",'
-                            f'IF(ROUND({a_cell_addr},2)>=700,"800/800","800/700"))))'
-                        )
+                    apply_styles(ws.cell(cur_row, c_offset + 1, value=f"RD-{rd}"), align=align_left_wrap, border=table_border)
+                    apply_styles(ws.cell(cur_row, c_offset + 2, value=f"=COUNTIF({data_range_str},{rd})"), align=align_right, border=table_border, num_format='0')
+                    apply_styles(ws.cell(cur_row, c_offset + 3, value=f"={ref_addr}*17.4*0.9"), align=align_right, border=table_border, num_format='0.00')
+    
+                    # RS Breaker (조건 추가: 500/630 분기)
+                    rs_brk = (
+                        f'=IF(ROUND({a_addr},2)<500,"630/500",'
+                        f'IF(ROUND({a_addr},2)<630,"630/630",'
+                        f'IF(ROUND({a_addr},2)>=630,"800/800","800/700")))'
                     )
-                    apply_styles(breaker_cell, align=align_center_wrap, border=table_border)
-                    
-                    # CABLE (요청: 새 단계 적용)
-                    cable_cell = ws.cell(
-                        cur_row, c_offset + 5,
-                        value=(
-                            f'=IF(ROUND({a_cell_addr},2)<507,"3xT70(169A)",'
-                            f'IF(ROUND({a_cell_addr},2)<676,"4xT70(169A)",'
-                            f'IF(ROUND({a_cell_addr},2)<845,"5xT70(169A)","6xT70(169A)")))'
-                        )
+                    apply_styles(ws.cell(cur_row, c_offset + 4, value=rs_brk), align=align_center_wrap, border=table_border)
+    
+                    # RS Cable 단계 수정
+                    rs_cable = (
+                        f'=IF(ROUND({a_addr},2)<507,"3xT70(169A)",'
+                        f'IF(ROUND({a_addr},2)<676,"4xT70(169A)",'
+                        f'IF(ROUND({a_addr},2)<845,"5xT70(169A)","6xT70(169A)")))'
                     )
-                    apply_styles(cable_cell, border=table_border, align=align_center_wrap)
-                    
-                    # KVA
-                    kva_cell = ws.cell(cur_row, c_offset + 6, value=f"={ref_con_cell_addr}*10.6") 
-                    apply_styles(kva_cell, align=align_right, border=table_border, num_format='0.00')
+                    apply_styles(ws.cell(cur_row, c_offset + 5, value=rs_cable), align=align_center_wrap, border=table_border)
+    
+                    apply_styles(ws.cell(cur_row, c_offset + 6, value=f"={ref_addr}*10.6"), align=align_right, border=table_border, num_format='0.00')
                     cur_row += 1
-
+    
                 rs_end_row = cur_row - 1
-                # RS 병합
                 ws.merge_cells(start_row=rs_start_row, start_column=c_offset, end_row=rs_end_row, end_column=c_offset)
-                rs_cell = ws.cell(rs_start_row, c_offset, f"RS-{rs}")
-                apply_styles(rs_cell, font=bold_font, align=align_center_wrap, border=table_border)
+                apply_styles(ws.cell(rs_start_row, c_offset, value=f"RS-{rs}"), font=bold_font, align=align_center_wrap, border=table_border)
                 for r in range(rs_start_row + 1, rs_end_row + 1):
                     apply_styles(ws.cell(r, c_offset), border=table_border)
                 rs_start_row_for_sum = rs_start_row
-
-            # --- LGSP 3행 ---
+    
+            # LGSP 3행 추가 (A/Breaker/Cable 수식 + 연녹색 배경 + 테두리)
             lgsp_start_row = cur_row
             lgsp_end_row = lgsp_start_row + 2
             ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_end_row, end_column=c_offset)
-            lgsp_cell = ws.cell(row=lgsp_start_row, column=c_offset, value="LGSP")
-            apply_styles(lgsp_cell, align=align_center_wrap, border=table_border)
-
-            # [중요] 병합된 LGSP 세로 칸의 나머지 셀에도 테두리 적용(좌/우 표 공통)
+            apply_styles(ws.cell(lgsp_start_row, c_offset, value="LGSP"), align=align_center_wrap, border=table_border, fill=lgsp_fill)
             for r in range(lgsp_start_row, lgsp_end_row + 1):
-                apply_styles(ws.cell(r, c_offset), border=table_border)
-
-            for r in range(lgsp_start_row, lgsp_end_row + 1):
-                rd_coord = f"{get_column_letter(c_offset + 1)}{r}"
-                a_addr  = f"{get_column_letter(c_offset + 3)}{r}"
-
-                # RS열 제외 나머지 열 테두리/수식
-                for i in range(1, len(headers)):
-                    cell_to_style = ws.cell(r, c_offset + i)
-                    if i == 1:  # RD (사용자 입력)
-                        apply_styles(cell_to_style, border=table_border, align=align_left_wrap)
-                    elif i == 3:  # A
-                        cell_to_style.value = lgsp_a_formula(rd_coord)
-                        apply_styles(cell_to_style, border=table_border, align=align_right, num_format='0.00')
-                    elif i == 4:  # BREAKER
-                        cell_to_style.value = lgsp_breaker_formula(a_addr)
-                        apply_styles(cell_to_style, border=table_border, align=align_center_wrap)
-                    elif i == 5:  # CABLE
-                        cell_to_style.value = lgsp_cable_formula(a_addr)
-                        apply_styles(cell_to_style, border=table_border, align=align_center_wrap)
-                    else:
-                        apply_styles(cell_to_style, border=table_border)
-
+                rd_cell = ws.cell(r, c_offset + 1)
+                apply_styles(rd_cell, border=table_border, align=align_left_wrap, fill=lgsp_fill)
+    
+                if side == "PORT":
+                    a_formula = f"=IFERROR(SUMPRODUCT(--({fan_port_lgsp_range}={rd_cell.coordinate}), {fan_port_qty_range}, {fan_rated_a_range}), 0)"
+                else:
+                    a_formula = f"=IFERROR(SUMPRODUCT(--({fan_stbd_lgsp_range}={rd_cell.coordinate}), {fan_stbd_qty_range}, {fan_rated_a_range}), 0)"
+                a_cell = ws.cell(r, c_offset + 3, value=a_formula)
+                apply_styles(a_cell, border=table_border, align=align_right, num_format='0.00', fill=lgsp_fill)
+    
+                a_addr = a_cell.coordinate
+    
+                brk = (
+                    f'=IF(ROUND({a_addr},2)<150,"160/150",'
+                    f'IF(ROUND({a_addr},2)<160,"160/160",'
+                    f'IF(ROUND({a_addr},2)<175,"250/175",'
+                    f'IF(ROUND({a_addr},2)<200,"250/200",'
+                    f'IF(ROUND({a_addr},2)<225,"250/225",'
+                    f'IF(ROUND({a_addr},2)<250,"250/250",'
+                    f'IF(ROUND({a_addr},2)<300,"400/300",'
+                    f'IF(ROUND({a_addr},2)<350,"400/350",'
+                    f'IF(ROUND({a_addr},2)<400,"400/400",'
+                    f'IF(ROUND({a_addr},2)<500,"630/500","630/630"))))))))))'
+                )
+                apply_styles(ws.cell(r, c_offset + 4, value=brk), border=table_border, align=align_center_wrap, fill=lgsp_fill)
+    
+                cable = (
+                    f'=IF({a_addr}<89,"HT25(89A)",'
+                    f'IF({a_addr}<110,"HT35(110A)",'
+                    f'IF({a_addr}<137,"HT50(137A)",'
+                    f'IF({a_addr}<169,"HT70(169A)",'
+                    f'IF({a_addr}<205,"HT95(205A)",'
+                    f'IF({a_addr}<237,"HT95(237A)",'
+                    f'IF({a_addr}<274,"2xHT50(137A)",'
+                    f'IF({a_addr}<338,"2xT70(169A)",'   # ★ HT → T
+                    f'IF({a_addr}<410,"2xT95(237A)",'   # ★ HT → T
+                    f'IF({a_addr}<474,"2xT120(237A)",""))))))))))'
+                )
+                apply_styles(ws.cell(r, c_offset + 5, value=cable), border=table_border, align=align_center_wrap, fill=lgsp_fill)
+    
+                # 나머지 LGSP 셀들도 테두리/배경 유지
+                apply_styles(ws.cell(r, c_offset + 2), border=table_border, fill=lgsp_fill)
+                apply_styles(ws.cell(r, c_offset + 6), border=table_border, fill=lgsp_fill)
+    
             cur_row = lgsp_end_row + 1
-
+    
             # Total
-            total_label_cell = ws.cell(row=cur_row, column=c_offset, value="Total")
-            apply_styles(total_label_cell, font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
-            apply_styles(ws.cell(cur_row, c_offset+1), fill=total_fill, border=table_border)
-
+            apply_styles(ws.cell(cur_row, c_offset, value="Total"), font=bold_font, align=align_left_wrap, fill=total_fill, border=table_border)
+            # 합계(REF/A/KVA)
             if rs_start_row_for_sum == -1:
-                ref_sum_formula, a_sum_formula, kva_sum_formula = 0, 0, 0
+                ref_sum, a_sum, kva_sum = 0, 0, 0
                 ref_total_coord = "0"
             else:
-                # 합계 범위 (LGSP 제외)
                 rs_end_row_for_sum = lgsp_start_row - 1
-                ref_sum_formula = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
-                a_sum_formula = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
-                kva_sum_formula = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
+                ref_sum = f"=SUM({get_column_letter(c_offset+2)}{rs_start_row_for_sum}:{get_column_letter(c_offset+2)}{rs_end_row_for_sum})"
+                a_sum   = f"=SUM({get_column_letter(c_offset+3)}{rs_start_row_for_sum}:{get_column_letter(c_offset+3)}{rs_end_row_for_sum})"
+                kva_sum = f"=SUM({get_column_letter(c_offset+6)}{rs_start_row_for_sum}:{get_column_letter(c_offset+6)}{rs_end_row_for_sum})"
                 ref_total_coord = f"{get_column_letter(c_offset+2)}{cur_row}"
-
-            ref_total_cell = ws.cell(cur_row, c_offset + 2, value=ref_sum_formula)
-            apply_styles(ref_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
-            rs_totals[rs] = ref_total_coord
-
-            a_total_cell = ws.cell(cur_row, c_offset + 3, value=a_sum_formula)
-            apply_styles(a_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
     
-            apply_styles(ws.cell(cur_row, c_offset+4), fill=total_fill, border=table_border) # BREAKER Total (blank)
-            apply_styles(ws.cell(cur_row, c_offset+5), fill=total_fill, border=table_border) # CABLE Total (blank)
-            
-            kva_total_cell = ws.cell(row=cur_row, column=c_offset + 6, value=kva_sum_formula)
-            apply_styles(kva_total_cell, font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
+            apply_styles(ws.cell(cur_row, c_offset + 1), fill=total_fill, border=table_border)
+            rs_totals[rs] = ref_total_coord
+            apply_styles(ws.cell(cur_row, c_offset + 2, value=ref_sum), font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0')
+            apply_styles(ws.cell(cur_row, c_offset + 3, value=a_sum),   font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
+            apply_styles(ws.cell(cur_row, c_offset + 4), fill=total_fill, border=table_border)  # BREAKER 합계(공란)
+            apply_styles(ws.cell(cur_row, c_offset + 5), fill=total_fill, border=table_border)  # CABLE 합계(공란)
+            apply_styles(ws.cell(cur_row, c_offset + 6, value=kva_sum), font=bold_font, align=align_right, fill=total_fill, border=table_border, num_format='0.00')
             cur_row += 1
-
-            cur_row += 1 # 섹션 간 간격
-            
-        return cur_row, rs_totals 
+            cur_row += 1  # 간격
+    
+        return cur_row, rs_totals
 
     # --- 4. 메인 실행 ---
 
@@ -1085,16 +1065,6 @@ def _write_summary_sheet_v5(
         total_cap_cell_coord = ws.cell(row=r_idx, column=fan_table_start_col + 4).coordinate 
         tr_cap_cell = ws.cell(row=r_idx, column=fan_table_start_col + 5)
         tr_cap_cell.value = f"=IFERROR({total_cap_cell_coord}/{tr_eff_addr_abs},0)"
-
-    # --- (요청 7) Reefer CNTR 표 옆 노트 추가: 한 칸 띄우고 노란 배경 + 빨간 글씨 ---
-    note_col = reefer_table_end_col + 2  # 한 칸 띄우고
-    note_row = table2_header_row  # 헤더 높이쯤에 표시
-    ws.column_dimensions[get_column_letter(note_col)].width = 28
-    note_cell = ws.cell(row=note_row, column=note_col, value="노란색 배경 데이터 직접 입력 혹은 수정 필요")
-    note_cell.fill = yellow_fill
-    note_cell.font = Font(color="FF0000", bold=True)
-    note_cell.alignment = align_left_wrap
-
 
 # --------------------------------
 # GUI
@@ -1951,4 +1921,3 @@ class App(tk.Tk):
 if __name__ == '__main__':
     app = App() 
     app.mainloop()
-
