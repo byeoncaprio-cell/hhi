@@ -321,6 +321,7 @@ def write_excel(
         left_offset = (max_grid_cols - b.cols) // 2
         block_start_row = cur_row
         block_end_row   = cur_row + b.rows - 1
+    
         grand_qty_ranges.append((block_start_row, block_end_row))
 
         for r in range(1, b.rows + 1):
@@ -338,6 +339,7 @@ def write_excel(
                 if (r,c) in b.sockets: cell.border = Border(left=Side(style="thick", color="FF0000"), right=Side(style="thick", color="FF0000"), top=Side(style="thick", color="FF0000"), bottom=Side(style="thick", color="FF0000"))
                 if global_grid_col in vertical_thick_cols: cell.border = Border(left=thick, right=cell.border.right, top=cell.border.top, bottom=cell.border.bottom)
 
+        
             # Q'ty 및 Gang 열 수식
             ws.cell(row=rr, column=qty_col, value=f"=COUNT({count_left_letter}{rr}:{count_right_letter}{rr})").alignment = Alignment(horizontal="center", vertical="center")
             ws.cell(row=rr, column=qty_col).font = Font(size=8)
@@ -345,6 +347,7 @@ def write_excel(
             for g in range(3, 10): ws.cell(row=rr, column=g_cols[g]).fill = gray_fill
             ws.cell(row=rr, column=g_sum_col).fill = gray_fill
 
+        
         sum_row = block_end_row + 1
         
         # LB/HOLD 구분하여 summary row 추가
@@ -555,6 +558,7 @@ def _write_summary_sheet_v5(
             # LGSP 3행 (병합 + 각 셀 테두리/배경, A/Breaker/Cable 수식 포함)
             lgsp_start_row = cur_row
             lgsp_end_row = lgsp_start_row + 2
+    
             ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_end_row, end_column=c_offset)
             lgsp_cell = ws.cell(row=lgsp_start_row, column=c_offset, value="LGSP")
             apply_styles(lgsp_cell, align=align_center_wrap, border=table_border, fill=lgsp_fill)
@@ -563,6 +567,7 @@ def _write_summary_sheet_v5(
                 # RD 입력칸
                 rd_cell = ws.cell(r, c_offset + 1)
                 apply_styles(rd_cell, border=table_border, align=align_left_wrap, fill=lgsp_fill)
+                rd_addr = rd_cell.coordinate  # <--- [수정] RD 셀 주소 가져오기
     
                 # A 수식
                 if side == "PORT":
@@ -572,10 +577,10 @@ def _write_summary_sheet_v5(
                 a_cell = ws.cell(r, c_offset + 3, value=a_formula)
                 apply_styles(a_cell, border=table_border, align=align_right, num_format='0.00', fill=lgsp_fill)
     
-                # ★ Breaker 수식 (요청 로직: / 뒤 숫자보다 A가 작을 때 해당 단계 선택)
+                # ★ Breaker 수식 (IF 조건 추가)
                 a_addr = a_cell.coordinate
-                brk = (
-                    f'=IF(ROUND({a_addr},2)<150,"160/150",'
+                brk_original = ( # <--- [수정] 변수명 변경
+                    f'IF(ROUND({a_addr},2)<150,"160/150",'
                     f'IF(ROUND({a_addr},2)<160,"160/160",'
                     f'IF(ROUND({a_addr},2)<175,"250/175",'
                     f'IF(ROUND({a_addr},2)<200,"250/200",'
@@ -586,12 +591,13 @@ def _write_summary_sheet_v5(
                     f'IF(ROUND({a_addr},2)<400,"400/400",'
                     f'IF(ROUND({a_addr},2)<500,"630/500","630/630"))))))))))'
                 )
+                brk = f'=IF({rd_addr}="", "-", {brk_original.lstrip("=")})' # <--- [수정] IF 래퍼(wrapper) 추가
                 breaker_cell = ws.cell(r, c_offset + 4, value=brk)
                 apply_styles(breaker_cell, border=table_border, align=align_center_wrap, fill=lgsp_fill)
     
-                # ★ Cable 수식 (2x 계열만 HT → T 로 변경)
-                cable = (
-                    f'=IF({a_addr}<89,"HT25(89A)",'
+                # ★ Cable 수식 (IF 조건 추가)
+                cable_original = ( # <--- [수정] 변수명 변경
+                    f'IF({a_addr}<89,"HT25(89A)",'
                     f'IF({a_addr}<110,"HT35(110A)",'
                     f'IF({a_addr}<137,"HT50(137A)",'
                     f'IF({a_addr}<169,"HT70(169A)",'
@@ -602,6 +608,7 @@ def _write_summary_sheet_v5(
                     f'IF({a_addr}<410,"2xT95(237A)",'   # ★ HT → T
                     f'IF({a_addr}<474,"2xT120(237A)",""))))))))))'
                 )
+                cable = f'=IF({rd_addr}="", "-", {cable_original.lstrip("=")})' # <--- [수정] IF 래퍼(wrapper) 추가
                 cable_cell = ws.cell(r, c_offset + 5, value=cable)
                 apply_styles(cable_cell, border=table_border, align=align_center_wrap, fill=lgsp_fill)
     
@@ -677,10 +684,12 @@ def _write_summary_sheet_v5(
             lgsp_start_row = cur_row
             lgsp_end_row = lgsp_start_row + 2
             ws.merge_cells(start_row=lgsp_start_row, start_column=c_offset, end_row=lgsp_end_row, end_column=c_offset)
+    
             apply_styles(ws.cell(lgsp_start_row, c_offset, value="LGSP"), align=align_center_wrap, border=table_border, fill=lgsp_fill)
             for r in range(lgsp_start_row, lgsp_end_row + 1):
                 rd_cell = ws.cell(r, c_offset + 1)
                 apply_styles(rd_cell, border=table_border, align=align_left_wrap, fill=lgsp_fill)
+                rd_addr = rd_cell.coordinate  # <--- [수정] RD 셀 주소 가져오기
     
                 if side == "PORT":
                     a_formula = f"=IFERROR(SUMPRODUCT(--({fan_port_lgsp_range}={rd_cell.coordinate}), {fan_port_qty_range}, {fan_rated_a_range}), 0)"
@@ -691,8 +700,8 @@ def _write_summary_sheet_v5(
     
                 a_addr = a_cell.coordinate
     
-                brk = (
-                    f'=IF(ROUND({a_addr},2)<150,"160/150",'
+                brk_original = ( # <--- [수정] 변수명 변경
+                    f'IF(ROUND({a_addr},2)<150,"160/150",'
                     f'IF(ROUND({a_addr},2)<160,"160/160",'
                     f'IF(ROUND({a_addr},2)<175,"250/175",'
                     f'IF(ROUND({a_addr},2)<200,"250/200",'
@@ -703,10 +712,12 @@ def _write_summary_sheet_v5(
                     f'IF(ROUND({a_addr},2)<400,"400/400",'
                     f'IF(ROUND({a_addr},2)<500,"630/500","630/630"))))))))))'
                 )
+                brk = f'=IF({rd_addr}="", "-", {brk_original.lstrip("=")})' # <--- [수정] IF 래퍼(wrapper) 추가
                 apply_styles(ws.cell(r, c_offset + 4, value=brk), border=table_border, align=align_center_wrap, fill=lgsp_fill)
     
-                cable = (
-                    f'=IF({a_addr}<89,"HT25(89A)",'
+            
+                cable_original = ( # <--- [수정] 변수명 변경
+                    f'IF({a_addr}<89,"HT25(89A)",'
                     f'IF({a_addr}<110,"HT35(110A)",'
                     f'IF({a_addr}<137,"HT50(137A)",'
                     f'IF({a_addr}<169,"HT70(169A)",'
@@ -717,6 +728,7 @@ def _write_summary_sheet_v5(
                     f'IF({a_addr}<410,"2xT95(237A)",'   # ★ HT → T
                     f'IF({a_addr}<474,"2xT120(237A)",""))))))))))'
                 )
+                cable = f'=IF({rd_addr}="", "-", {cable_original.lstrip("=")})' # <--- [수정] IF 래퍼(wrapper) 추가
                 apply_styles(ws.cell(r, c_offset + 5, value=cable), border=table_border, align=align_center_wrap, fill=lgsp_fill)
     
                 # 나머지 LGSP 셀들도 테두리/배경 유지
@@ -798,8 +810,7 @@ def _write_summary_sheet_v5(
 
     # 간격 열 너비
     gap_col_2_idx = fan_table_start_col - 1
-    ws.column_dimensions[get_column_letter(gap_col_2_idx)].width = 1
-    ws.column_dimensions[get_column_letter(gap_col_2_idx)].auto_size = False
+    ws.column_dimensions[get_column_letter(gap_col_2_idx)].width = 10
 
     table1_row_titles = [
         "SIDE PASSGAEWAY(FWD)", "No.1A (Exp)", "No.2F (Exp)", "No.3F", "No.4F",
@@ -841,6 +852,7 @@ def _write_summary_sheet_v5(
     apply_styles(ws.cell(table1_header_row_3, q_col, value="Description"), font=stbd_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
     apply_styles(ws.cell(table1_header_row_3, q_col + 1, value="Q'ty"), font=stbd_font, fill=yellow_fill, align=align_center_wrap, border=table_border)
 
+    
     # S열 LGSP No - 노란 배경 유지
     s_col = q_col + 2
     ws.merge_cells(start_row=table1_header_row_2, start_column=s_col, end_row=table1_header_row_3, end_column=s_col)
@@ -1025,6 +1037,7 @@ def _write_summary_sheet_v5(
         tr_cap_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 5)
         apply_styles(tr_cap_cell, border=table_border, fill=row_fill, align=align_right, num_format='0.00')
     
+        
         tr_spec_cell = ws.cell(row=current_row_for_reefer_table, column=fan_table_start_col + 6)
         apply_styles(tr_spec_cell, border=table_border, fill=row_fill)
 
@@ -1133,7 +1146,7 @@ class GridCanvas(ttk.Frame):
             self.mode_number.set(False)
             self.mode_eraser.set(False)
             self.mode_socket.set(False)
-            mode_var.set(!was_on if False else (not was_on))  # 안전 토글
+            mode_var.set(was_on if False else (not was_on))  # 안전 토글
         else:
             if self.mode_eraser.get() or self.mode_socket.get():
                 self.mode_eraser.set(False)
@@ -1214,7 +1227,7 @@ class GridCanvas(ttk.Frame):
         self.btn_color.pack(side="left", padx=2)
         
         self.btn_number = ttk.Button(mode_btn_frame, text="NUMBER", 
-                                     command=lambda: self._toggle_mode(self.mode_number, False, self.btn_number))
+                                    command=lambda: self._toggle_mode(self.mode_number, False, self.btn_number))
         self.btn_number.pack(side="left", padx=2)
         
         self.btn_eraser = ttk.Button(mode_btn_frame, text="ERASER", 
@@ -1255,9 +1268,12 @@ class GridCanvas(ttk.Frame):
 
         self.canvas = tk.Canvas(left, bg="white", highlightthickness=1, highlightbackground="#cccccc")
         self.canvas.pack(fill="both", expand=True, pady=5)
-        self.canvas.bind("<Button-1>", self.on_press); self.canvas.bind("<B1-Motion>", self.on_drag); self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<Button-3>", self.on_press_right); self.canvas.bind("<B3-Motion>", self.on_drag_right); self.canvas.bind("<ButtonRelease-3>", self.on_release_right)
-        self.canvas.bind("<Control-Button-1>", self.on_press_right); self.canvas.bind("<Control-B1-Motion>", self.on_drag_right); self.canvas.bind("<Control-ButtonRelease-1>", self.on_release_right)
+        self.canvas.bind("<Button-1>", self.on_press); self.canvas.bind("<B1-Motion>", self.on_drag);
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<Button-3>", self.on_press_right); self.canvas.bind("<B3-Motion>", self.on_drag_right);
+        self.canvas.bind("<ButtonRelease-3>", self.on_release_right)
+        self.canvas.bind("<Control-Button-1>", self.on_press_right); self.canvas.bind("<Control-B1-Motion>", self.on_drag_right);
+        self.canvas.bind("<Control-ButtonRelease-1>", self.on_release_right)
 
         gang_row = ttk.Frame(left); gang_row.pack(fill="x", pady=5)
         ttk.Label(gang_row, text="Gang per Block").grid(row=0, column=0, sticky="e", padx=4, pady=2)
@@ -1351,7 +1367,7 @@ class GridCanvas(ttk.Frame):
         odd_rs  = [i for i in range(1, rs_total+1) if i % 2 == 1]
 
         rd_counts = _collect_rd_counts(self.items)
-   
+    
         grand_total = sum(rd_counts.values())
         self.grand_total_label.config(text=f"Grand Total: {grand_total}")
 
@@ -1844,6 +1860,7 @@ class GridCanvas(ttk.Frame):
 
                 group_cells = {(start_cell[0] + r_off, start_cell[1] + (c_off if is_left else -c_off))
                                        for r_off, c_off in shape_pattern}
+            
                 if not group_cells.issubset(unfilled): 
                     continue
 
@@ -1871,6 +1888,7 @@ class GridCanvas(ttk.Frame):
         current_idx = cursor[0] 
         while current_idx < n:
             current_rd = rds[current_idx]
+            
             can_fit = rd_remaining.get(current_rd, 0) >= need
             below_target = target_counts.get(current_rd, 0) > 0 
         
